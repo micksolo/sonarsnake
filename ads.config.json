@@ -1,0 +1,8 @@
+{
+  "_comment": "Optional fallback when the Netlify env var ADSENSE_CLIENT is unset. Leave client empty to keep ads off. Set client to your AdSense publisher id (ca-pub-...). Optional: channel, host (ca-host-pub-...), frequencyHint (for example 120s), test (true only while checking placements). Do not put API secrets in this file.",
+  "client": "",
+  "channel": "",
+  "host": "",
+  "frequencyHint": "120s",
+  "test": false
+}
