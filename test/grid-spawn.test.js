@@ -31,12 +31,12 @@ function nearestWall(context, x, y){
   return best;
 }
 
-test('18x18 grid fills the same 648 play area', ()=>{
-  assert.match(html, /const COLS=18,ROWS=18,CELL=36;/);
+test('18x18 grid fills a 540 play area', ()=>{
+  assert.match(html, /const COLS=18,ROWS=18,CELL=30;/);
   assert.match(html, /const VIEW=COLS\*CELL;/);
-  assert.match(html, /<canvas id="cv" width="648" height="648"><\/canvas>/);
-  assert.match(html, /#stage\{[^}]*648px/);
-  assert.equal(18*36, 648);
+  assert.match(html, /<canvas id="cv" width="540" height="540"><\/canvas>/);
+  assert.match(html, /#stage\{[^}]*540px/);
+  assert.equal(18*30, 540);
 });
 
 test('level 1 spawn is as far from walls as an 18x18 board allows', ()=>{
