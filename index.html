@@ -67,12 +67,14 @@
         </form>
         <ol id="lblist"></ol>
         <div id="panelbtns">
+          <button type="button" id="pbtnreward" hidden>watch ad · continue</button>
           <button type="button" id="pbtnagain" hidden>play again</button>
           <button type="button" id="pbtnclose">close</button>
         </div>
       </div>
     </div>
   </div>
+  <!-- H5 Games Ads are full-screen Ad Placement breaks. This box stays until ADSENSE_CLIENT or ads.config.json has a publisher id. -->
   <div id="adslot"><span>ad slot · paste ad code here once approved</span></div>
 </div>
 <script>
@@ -90,7 +92,8 @@ const scoreEl=document.getElementById('score'),bestEl=document.getElementById('b
       levelEl=document.getElementById('level'),flashdots=document.getElementById('flashdots'),
       panel=document.getElementById('panel'),lform=document.getElementById('lform'),
       lname=document.getElementById('lname'),lblist=document.getElementById('lblist'),
-      pbtnagain=document.getElementById('pbtnagain'),pbtnclose=document.getElementById('pbtnclose'),
+      pbtnagain=document.getElementById('pbtnagain'),pbtnreward=document.getElementById('pbtnreward'),
+      pbtnclose=document.getElementById('pbtnclose'),
       sndbtn=document.getElementById('sndbtn'),lbbtn=document.getElementById('lbbtn');
 
 let state='title',grid=null,snake=null,dir={x:1,y:0},dirQueue=[],food=null,pings=[],
@@ -100,13 +103,15 @@ let state='title',grid=null,snake=null,dir={x:1,y:0},dirQueue=[],food=null,pings
 let best=Number(localStorage.getItem('sonarsnake_best')||0);
 bestEl.textContent=best;
 
-const GAME_VERSION='1.1.0';
+const GAME_VERSION='1.2.0';
 function uuid(){return crypto.randomUUID?crypto.randomUUID():'u'+Date.now().toString(36)+Math.random().toString(36).slice(2);}
 let cid=localStorage.getItem('ss_cid');
 if(!cid){cid=uuid();try{localStorage.setItem('ss_cid',cid);}catch(e){}}
 const sid=uuid();
+const sessionStartT=Date.now();
 const aq=[];
-let runCount=0,lastRunEndT=null,runStats=null,runAbandoned=false;
+let runCount=0,lastRunEndT=null,runStats=null,leaveTracked=false,runsFinished=0;
+let adsReady=false,adHold=false,adHoldStarted=0,adHoldAccum=0,adBreakBusy=false,rewardGen=0,rewardShow=null;
 function track(name,props){
   aq.push({name,props:props||{},t:Date.now()});
   if(aq.length>=10)flushAnalytics();
@@ -119,13 +124,224 @@ function flushAnalytics(beacon){
     else fetch('/api/analytics',{method:'POST',headers:{'Content-Type':'application/json'},body,keepalive:true}).catch(()=>{});
   }catch(e){}
 }
+function deviceProps(){
+  const ua=navigator.userAgent||'';
+  const touchPoints=navigator.maxTouchPoints||0;
+  const coarse=matchMedia('(pointer:coarse)').matches;
+  const fine=matchMedia('(pointer:fine)').matches;
+  let pointer='none';
+  if(coarse&&fine)pointer='both';
+  else if(coarse)pointer='coarse';
+  else if(fine)pointer='fine';
+  const phone=/Mobi|iPhone|iPod|Android.+Mobile|Windows Phone/i.test(ua);
+  const tablet=/iPad|Tablet|PlayBook|Silk/i.test(ua)||(/Android/i.test(ua)&&!/Mobile/i.test(ua))||(/Macintosh/i.test(ua)&&touchPoints>1);
+  return {
+    touch:coarse,pointer,touchPoints,
+    dpr:Math.round((window.devicePixelRatio||1)*100)/100,
+    vw:innerWidth,vh:innerHeight,sw:screen.width||0,sh:screen.height||0,
+    form:phone?'phone':tablet?'tablet':'desktop',
+    lang:(navigator.language||'').slice(0,8)
+  };
+}
+function noteSession(reason){
+  if(leaveTracked)return;
+  const now=Date.now();
+  const durationMs=Math.max(0,now-sessionStartT);
+  let runMs=null;
+  if(runStats&&runStats.startT&&state!=='title'){
+    const end=state==='playing'?now:(lastRunEndT||now);
+    runMs=Math.max(0,end-runStats.startT-adHoldAccum);
+  }
+  leaveTracked=true;
+  track('abandon',{
+    location:state,panel:!panel.hidden,durationMs,runMs,
+    level:state==='title'?0:level,score:state==='title'?0:score,reason
+  });
+  track('session_end',{durationMs,location:state,runs:runCount,reason});
+}
+function sessionPing(){
+  if(leaveTracked)return;
+  track('session_ping',{durationMs:Math.max(0,Date.now()-sessionStartT),location:state});
+}
 setInterval(()=>flushAnalytics(),15000);
-window.addEventListener('pagehide',()=>{
-  if(state==='playing'&&!runAbandoned){runAbandoned=true;track('abandon',{level,score});}
-  flushAnalytics(true);
+setInterval(sessionPing,30000);
+window.addEventListener('pagehide',()=>{noteSession('pagehide');flushAnalytics(true);});
+window.addEventListener('pageshow',e=>{if(e.persisted)leaveTracked=false;});
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==='hidden'){sessionPing();flushAnalytics(true);}
 });
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')flushAnalytics(true);});
-track('load',{touch:matchMedia('(pointer:coarse)').matches,vw:innerWidth,vh:innerHeight,lang:(navigator.language||'').slice(0,8)});
+track('session_start',{});
+track('load',deviceProps());
+
+function normalizeAds(raw){
+  if(!raw||typeof raw!=='object')return {enabled:false};
+  const client=String(raw.client||'').trim();
+  if(!/^ca-pub-\d{10,22}$/.test(client))return {enabled:false};
+  const cfg={
+    enabled:true,client,
+    frequencyHint:/^\d{1,4}s$/.test(String(raw.frequencyHint||'').trim())?String(raw.frequencyHint).trim():'120s',
+    test:raw.test===true||raw.test==='on'||raw.test==='1'||raw.test==='true'
+  };
+  const channel=String(raw.channel||'').trim();
+  const host=String(raw.host||'').trim();
+  if(/^\d{1,20}$/.test(channel))cfg.channel=channel;
+  if(/^ca-host-pub-\d{1,22}$/.test(host))cfg.host=host;
+  return cfg;
+}
+function syncAdSound(){
+  if(typeof window.adConfig==='function')window.adConfig({sound:muted?'off':'on'});
+}
+function beginAdHold(){
+  if(adHold)return;
+  adHold=true;
+  adHoldStarted=Date.now();
+}
+function endAdHold(){
+  if(!adHold)return;
+  if(adHoldStarted)adHoldAccum+=Date.now()-adHoldStarted;
+  adHold=false;
+  adHoldStarted=0;
+}
+function placementProps(info,type,name){
+  const g=(v,n)=>String(v==null?'':v).slice(0,n);
+  return {
+    breakType:g(info&&info.breakType||type,24),
+    breakName:g(info&&info.breakName||name,40),
+    breakFormat:g(info&&info.breakFormat,24),
+    breakStatus:g(info&&info.breakStatus,32)
+  };
+}
+function armAds(cfg){
+  window.adsbygoogle=window.adsbygoogle||[];
+  window.adBreak=window.adConfig=function(o){window.adsbygoogle.push(o);};
+  window.adConfig({
+    preloadAdBreaks:'on',
+    sound:muted?'off':'on',
+    onReady:()=>{
+      adsReady=true;
+      if(state==='dead')offerContinueAd();
+    }
+  });
+  const s=document.createElement('script');
+  s.async=true;
+  s.crossOrigin='anonymous';
+  s.src='https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client='+encodeURIComponent(cfg.client);
+  s.setAttribute('data-ad-client',cfg.client);
+  if(cfg.channel)s.setAttribute('data-ad-channel',cfg.channel);
+  if(cfg.host)s.setAttribute('data-ad-host',cfg.host);
+  if(cfg.frequencyHint)s.setAttribute('data-ad-frequency-hint',cfg.frequencyHint);
+  if(cfg.test)s.setAttribute('data-adbreak-test','on');
+  document.head.appendChild(s);
+  const slot=document.getElementById('adslot');
+  if(slot)slot.hidden=true;
+}
+async function initAds(){
+  let cfg={enabled:false};
+  try{
+    const r=await fetch('/api/ads-config',{cache:'no-store'});
+    if(r.ok)cfg=normalizeAds(await r.json());
+  }catch(e){}
+  if(!cfg.enabled){
+    try{
+      const r=await fetch('/ads.config.json',{cache:'no-store'});
+      if(r.ok)cfg=normalizeAds(await r.json());
+    }catch(e){}
+  }
+  if(cfg.enabled)armAds(cfg);
+}
+initAds();
+function requestInterstitialThen(startFn){
+  if(!adsReady||runsFinished<1||adBreakBusy||typeof window.adBreak!=='function'){startFn();return;}
+  adBreakBusy=true;
+  let settled=false;
+  const finish=()=>{
+    if(settled)return;
+    settled=true;
+    adBreakBusy=false;
+    endAdHold();
+    startFn();
+  };
+  const quick=setTimeout(()=>{if(!adHold)finish();},5000);
+  const slow=setTimeout(finish,120000);
+  try{
+    window.adBreak({
+      type:'next',
+      name:'restart-game',
+      beforeAd:()=>{
+        clearTimeout(quick);
+        beginAdHold();
+        track('before_ad',{breakType:'next',breakName:'restart-game'});
+      },
+      afterAd:()=>{track('after_ad',{breakType:'next',breakName:'restart-game'});},
+      adBreakDone:(info)=>{
+        clearTimeout(quick);clearTimeout(slow);
+        endAdHold();
+        track('ad_break_done',placementProps(info,'next','restart-game'));
+        finish();
+      }
+    });
+  }catch(e){clearTimeout(quick);clearTimeout(slow);finish();}
+}
+function offerContinueAd(){
+  if(!adsReady||adBreakBusy||adHold||state!=='dead'||typeof window.adBreak!=='function')return;
+  const gen=rewardGen;
+  adBreakBusy=true;
+  try{
+    window.adBreak({
+      type:'reward',
+      name:'continue-run',
+      beforeReward:(showAdFn)=>{
+        if(gen!==rewardGen||state!=='dead')return;
+        rewardShow=()=>{showAdFn();};
+        pbtnreward.hidden=false;
+      },
+      beforeAd:()=>{
+        beginAdHold();
+        track('before_ad',{breakType:'reward',breakName:'continue-run'});
+      },
+      adDismissed:()=>{
+        if(gen!==rewardGen)return;
+        rewardShow=null;
+        pbtnreward.hidden=true;
+      },
+      adViewed:()=>{
+        rewardShow=null;
+        pbtnreward.hidden=true;
+        if(gen!==rewardGen)return;
+        track('ad_reward',{breakName:'continue-run'});
+        reviveRun();
+      },
+      afterAd:()=>{track('after_ad',{breakType:'reward',breakName:'continue-run'});},
+      adBreakDone:(info)=>{
+        endAdHold();
+        adBreakBusy=false;
+        track('ad_break_done',placementProps(info,'reward','continue-run'));
+      }
+    });
+  }catch(e){adBreakBusy=false;}
+}
+function reviveRun(){
+  if(!grid)return;
+  state='playing';
+  deathT=0;
+  deathPanelShown=false;
+  hidePanel();
+  pbtnreward.hidden=true;
+  for(let dy=-2;dy<=2;dy++)for(let dx=-2;dx<=2;dx++){
+    const nx=13+dx,ny=13+dy;
+    if(inB(nx,ny))grid[idx(nx,ny)].wall=false;
+  }
+  for(let x=8;x<=18;x++)if(inB(x,13))grid[idx(x,13)].wall=false;
+  const len=Math.min(Math.max(snake.length,5),10);
+  snake=[];
+  for(let i=0;i<len;i++)snake.push({x:13-i,y:13});
+  dir={x:1,y:0};
+  dirQueue=[];
+  flashes=3;
+  updateFlashHUD();
+  flash(true);
+  tone(440,880,0.2,'triangle',0.08);
+}
 
 const idx=(x,y)=>y*COLS+x;
 const inB=(x,y)=>x>=0&&y>=0&&x<COLS&&y<ROWS;
@@ -137,7 +353,7 @@ function initAudio(){
   if(actx&&actx.state==='suspended')actx.resume();
 }
 function tone(f0,f1,dur,type,vol,delay=0){
-  if(!actx||muted)return;
+  if(!actx||muted||adHold)return;
   const t=actx.currentTime+delay;
   const o=actx.createOscillator(),g=actx.createGain();
   o.type=type;
@@ -291,13 +507,25 @@ lform.addEventListener('submit',async e=>{
 });
 pbtnagain.addEventListener('click',e=>{e.currentTarget.blur();hidePanel();newGame();});
 pbtnclose.addEventListener('click',e=>{e.currentTarget.blur();hidePanel();});
-sndbtn.addEventListener('click',e=>{
-  e.currentTarget.blur();
-  muted=!muted;
+function setMuted(next){
+  muted=next;
   sndbtn.textContent=muted?'snd off':'snd on';
   track('mute',{muted});
+  syncAdSound();
+}
+sndbtn.addEventListener('click',e=>{
+  e.currentTarget.blur();
+  setMuted(!muted);
+});
+pbtnreward.addEventListener('click',e=>{
+  e.currentTarget.blur();
+  const show=rewardShow;
+  rewardShow=null;
+  pbtnreward.hidden=true;
+  if(show)show();
 });
 lbbtn.addEventListener('click',e=>{
+  if(adHold)return;
   e.currentTarget.blur();
   if(!panel.hidden)hidePanel();
   else if(state==='title'||state==='dead')showPanel(state==='dead'&&!submitted&&score>0);
@@ -322,22 +550,30 @@ function flash(free){
   tone(1800,240,0.5,'sine',0.06,0.05);
 }
 
-function newGame(){
+function beginRun(){
   score=0;level=1;foods=0;moveInterval=260;moveAcc=0;
   flashes=3;flashHold=0;
   pings=[];flashT=0;deathT=0;beaconT=0;
   submitted=false;deathPanelShown=false;
+  adHoldAccum=0;
   hidePanel();
+  pbtnreward.hidden=true;
   const now=Date.now();
   track('run_start',{run:++runCount,gapMs:lastRunEndT?now-lastRunEndT:null});
   runStats={startT:now,pingsUsed:0,emptyPings:0,firstFoodMs:null};
-  runAbandoned=false;
   genMaze();spawnFood();
   state='playing';
   scoreEl.textContent='0';levelEl.textContent='1';
   updateFlashHUD();
   flash(true);
   tone(440,880,0.25,'triangle',0.1);
+}
+function newGame(){
+  if(adHold)return;
+  rewardGen++;
+  rewardShow=null;
+  pbtnreward.hidden=true;
+  requestInterstitialThen(beginRun);
 }
 
 function levelUp(){
@@ -355,11 +591,13 @@ function levelUp(){
 
 function die(cause,deathX,deathY){
   state='dead';deathT=0;
+  runsFinished++;
   for(const c of grid){c.reveal=1;c.seen=true;}
   shakeT=shakeMax=0.5;shakeAmp=9;
   lastRunEndT=Date.now();
+  const played=runStats?Math.max(0,lastRunEndT-runStats.startT-adHoldAccum):0;
   if(runStats)track('run_end',{cause,score,level,foods,pingsUsed:runStats.pingsUsed,emptyPings:runStats.emptyPings,
-    firstFoodMs:runStats.firstFoodMs,seconds:Math.round((lastRunEndT-runStats.startT)/100)/10,deathX,deathY});
+    firstFoodMs:runStats.firstFoodMs,seconds:Math.round(played/100)/10,deathX,deathY});
   if(score>best){
     best=score;localStorage.setItem('sonarsnake_best',best);
     bestEl.textContent=best;
@@ -394,6 +632,7 @@ function step(){
 }
 
 function update(dt){
+  if(adHold)return;
   tGlobal+=dt;beaconT+=dt;
   if(shakeT>0)shakeT=Math.max(0,shakeT-dt);
   if(flashT>0)flashT=Math.max(0,flashT-dt);
@@ -402,7 +641,7 @@ function update(dt){
     while(moveAcc>=moveInterval&&state==='playing'){moveAcc-=moveInterval;step();}
   }else if(state==='dead'){
     deathT+=dt;
-    if(score>0&&!submitted&&!deathPanelShown&&deathT>0.8){deathPanelShown=true;showPanel(true,'death');}
+    if(score>0&&!submitted&&!deathPanelShown&&deathT>0.8){deathPanelShown=true;showPanel(true,'death');offerContinueAd();}
   }
   if(grid){
     if(state==='playing'){
@@ -606,8 +845,9 @@ window.addEventListener('keydown',e=>{
     return;
   }
   const k=e.key;
+  if(adHold){if(k===' '||KEYDIRS[k])e.preventDefault();return;}
   if(k===' '||KEYDIRS[k])e.preventDefault();
-  if(k==='m'||k==='M'){muted=!muted;sndbtn.textContent=muted?'snd off':'snd on';return;}
+  if(k==='m'||k==='M'){setMuted(!muted);return;}
   if(!panel.hidden&&(k==='l'||k==='L'||k==='Escape')){hidePanel();return;}
   if((k==='l'||k==='L')&&(state==='title'||state==='dead')){
     showPanel(state==='dead'&&!submitted&&score>0);
@@ -628,11 +868,13 @@ document.addEventListener('touchmove',e=>{
 
 let touchStart=null;
 function pressAction(){
+  if(adHold)return;
   if(state==='title')newGame();
   else if(state==='dead'&&deathT>0.5)newGame();
   else if(state==='playing')flash(false);
 }
 cv.addEventListener('pointerdown',e=>{
+  if(adHold)return;
   initAudio();
   if(e.pointerType==='touch'){
     touchStart={x:e.clientX,y:e.clientY,dragged:false};

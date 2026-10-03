@@ -2,7 +2,10 @@
   "name": "sonar-snake",
   "private": true,
   "type": "module",
+  "scripts": {
+    "test": "node --test"
+  },
   "dependencies": {
-    "@netlify/blobs": "^7.0.0"
+    "@netlify/blobs": "^11.1.3"
   }
 }
