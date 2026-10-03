@@ -79,11 +79,14 @@
 </div>
 <script>
 (()=>{
-const COLS=27,ROWS=27,CELL=24;
+const COLS=18,ROWS=18,CELL=36;
+const VIEW=COLS*CELL;
+const U=CELL/24;
 
 const cv=document.getElementById('cv'),ctx=cv.getContext('2d');
+cv.width=VIEW;cv.height=VIEW;
 let cvScale=1;
-function updScale(){const w=cv.getBoundingClientRect().width;if(w>0)cvScale=w/648;}
+function updScale(){const w=cv.getBoundingClientRect().width;if(w>0)cvScale=w/VIEW;}
 window.addEventListener('resize',updScale);
 window.addEventListener('orientationchange',()=>setTimeout(updScale,300));
 updScale();
@@ -327,14 +330,20 @@ function reviveRun(){
   deathPanelShown=false;
   hidePanel();
   pbtnreward.hidden=true;
-  for(let dy=-2;dy<=2;dy++)for(let dx=-2;dx<=2;dx++){
-    const nx=13+dx,ny=13+dy;
-    if(inB(nx,ny))grid[idx(nx,ny)].wall=false;
+  const len=Math.min(Math.max(snake?snake.length:OPEN_LEN,OPEN_LEN),10);
+  const cells=openSnake(len);
+  if(level===1)carveOpen(cells);
+  else{
+    for(const s of cells){
+      for(let dy=-2;dy<=2;dy++)for(let dx=-2;dx<=2;dx++){
+        const nx=s.x+dx,ny=s.y+dy;
+        if(nx>0&&ny>0&&nx<COLS-1&&ny<ROWS-1)grid[idx(nx,ny)].wall=false;
+      }
+    }
+    const head=cells[0];
+    for(let x=head.x;x<Math.min(COLS-1,head.x+OPEN_CLEAR);x++)grid[idx(x,head.y)].wall=false;
   }
-  for(let x=8;x<=18;x++)if(inB(x,13))grid[idx(x,13)].wall=false;
-  const len=Math.min(Math.max(snake.length,5),10);
-  snake=[];
-  for(let i=0;i<len;i++)snake.push({x:13-i,y:13});
+  snake=cells.map(c=>({x:c.x,y:c.y}));
   dir={x:1,y:0};
   dirQueue=[];
   flashes=3;
@@ -377,14 +386,47 @@ function computeReachable(sx,sy){
   return seen;
 }
 
+// Length 5 on an 18x18 board with a walled border. The interior is 16 cells
+// across, so the body cannot sit 10 from every wall. Centering it puts the
+// tail 6 from the left border and the head 7 from the right — 6 is the most
+// every segment can have. Level 1 removes any interior wall closer than the
+// border already is, and leaves the opening heading clear to that border.
+const OPEN_LEN=5;
+const OPEN_CLEAR=6;
+function openSnake(len){
+  const y=Math.floor((ROWS-1)/2);
+  let tail=Math.floor((COLS-len)/2);
+  if(tail<1)tail=1;
+  let head=tail+len-1;
+  if(head>COLS-2){head=COLS-2;tail=head-(len-1);}
+  const cells=[];
+  for(let i=0;i<len;i++)cells.push({x:head-i,y});
+  return cells;
+}
+function borderClear(x,y){return Math.min(x,y,COLS-1-x,ROWS-1-y);}
+function carveOpen(cells){
+  for(let y=1;y<ROWS-1;y++)for(let x=1;x<COLS-1;x++){
+    for(const s of cells){
+      if(Math.max(Math.abs(x-s.x),Math.abs(y-s.y))<borderClear(s.x,s.y)){
+        grid[idx(x,y)].wall=false;
+        break;
+      }
+    }
+  }
+  const head=cells[0];
+  for(let x=head.x+1;x<COLS-1;x++)grid[idx(x,head.y)].wall=false;
+}
 function genMaze(){
+  const cells=openSnake(OPEN_LEN);
+  const head=cells[0];
   for(let attempt=0;attempt<6;attempt++){
     grid=[];
     for(let y=0;y<ROWS;y++)for(let x=0;x<COLS;x++)
       grid.push({wall:x===0||y===0||x===COLS-1||y===ROWS-1,reveal:0,seen:false});
     const runs=6+Math.min(level,8);
+    const half=Math.max(1,Math.floor((COLS-2)/2));
     for(let i=0;i<runs;i++){
-      let x=1+Math.floor(Math.random()*12),y=1+Math.floor(Math.random()*(ROWS-2));
+      let x=1+Math.floor(Math.random()*half),y=1+Math.floor(Math.random()*(ROWS-2));
       const horiz=Math.random()<0.5;
       const len=3+Math.floor(Math.random()*5);
       for(let j=0;j<len;j++){
@@ -394,17 +436,12 @@ function genMaze(){
         if(horiz)x++;else y++;
       }
     }
-    for(let dy=-2;dy<=2;dy++)for(let dx=-2;dx<=2;dx++){
-      const nx=13+dx,ny=13+dy;
-      if(inB(nx,ny))grid[idx(nx,ny)].wall=false;
-    }
-    for(let x=8;x<=18;x++)grid[idx(x,13)].wall=false;
-    const R=computeReachable(13,13);
+    carveOpen(cells);
+    const R=computeReachable(head.x,head.y);
     for(let i=0;i<grid.length;i++)if(!grid[i].wall&&!R.has(i))grid[i].wall=true;
-    if(R.size>80)break;
+    if(R.size>(COLS-2)*(ROWS-2)*0.35)break;
   }
-  snake=[];
-  for(let i=0;i<5;i++)snake.push({x:13-i,y:13});
+  snake=cells.map(c=>({x:c.x,y:c.y}));
   dir={x:1,y:0};dirQueue=[];
 }
 
@@ -681,10 +718,10 @@ function drawCells(){
     const b=cellBright(x,y);
     if(b<0.03)continue;
     ctx.fillStyle=`rgba(72,214,190,${(b*0.8).toFixed(3)})`;
-    rrect(x*CELL+2,y*CELL+2,CELL-4,CELL-4,4);
+    rrect(x*CELL+2*U,y*CELL+2*U,CELL-4*U,CELL-4*U,4*U);
     if(b>0.35){
       ctx.fillStyle=`rgba(180,255,240,${(b*0.5).toFixed(3)})`;
-      rrect(x*CELL+7,y*CELL+7,CELL-14,CELL-14,3);
+      rrect(x*CELL+7*U,y*CELL+7*U,CELL-14*U,CELL-14*U,3*U);
     }
   }
 }
@@ -712,10 +749,10 @@ function drawFood(){
     const h=snake[0],hx=(h.x+0.5)*CELL,hy=(h.y+0.5)*CELL;
     const ang=Math.atan2(cy-hy,cx-hx);
     ctx.save();
-    ctx.translate(hx+Math.cos(ang)*38,hy+Math.sin(ang)*38);
+    ctx.translate(hx+Math.cos(ang)*38*U,hy+Math.sin(ang)*38*U);
     ctx.rotate(ang);
     ctx.fillStyle=`rgba(255,196,90,${(arrow*0.85).toFixed(3)})`;
-    ctx.beginPath();ctx.moveTo(9,0);ctx.lineTo(-6,-6);ctx.lineTo(-6,6);ctx.closePath();ctx.fill();
+    ctx.beginPath();ctx.moveTo(9*U,0);ctx.lineTo(-6*U,-6*U);ctx.lineTo(-6*U,6*U);ctx.closePath();ctx.fill();
     ctx.restore();
   }
 }
@@ -726,24 +763,24 @@ function drawSnake(){
     const s=snake[i],t=i/Math.max(1,snake.length-1);
     const hue=dead?8:168+t*44,light=dead?50-20*t:62-26*t;
     ctx.fillStyle=`hsl(${hue.toFixed(0)} 80% ${light.toFixed(0)}%)`;
-    rrect(s.x*CELL+2,s.y*CELL+2,CELL-4,CELL-4,7);
+    rrect(s.x*CELL+2*U,s.y*CELL+2*U,CELL-4*U,CELL-4*U,7*U);
   }
   const h=snake[0],ex=(h.x+0.5)*CELL,ey=(h.y+0.5)*CELL;
-  const fx=dir.x*4,fy=dir.y*4,sx=-dir.y*4,sy=dir.x*4;
+  const fx=dir.x*4*U,fy=dir.y*4*U,sx=-dir.y*4*U,sy=dir.x*4*U;
   ctx.fillStyle='#04070d';
-  ctx.beginPath();ctx.arc(ex+fx+sx,ey+fy+sy,2.4,0,Math.PI*2);ctx.fill();
-  ctx.beginPath();ctx.arc(ex+fx-sx,ey+fy-sy,2.4,0,Math.PI*2);ctx.fill();
+  ctx.beginPath();ctx.arc(ex+fx+sx,ey+fy+sy,2.4*U,0,Math.PI*2);ctx.fill();
+  ctx.beginPath();ctx.arc(ex+fx-sx,ey+fy-sy,2.4*U,0,Math.PI*2);ctx.fill();
 }
 
 function drawPings(){
   for(const p of pings){
     const a=Math.max(0,1-p.r/p.maxR);
     ctx.strokeStyle=`rgba(160,225,255,${(a*0.6).toFixed(3)})`;
-    ctx.lineWidth=2;
+    ctx.lineWidth=2*U;
     ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,Math.PI*2);ctx.stroke();
-    if(p.r>14){
+    if(p.r>14*U){
       ctx.strokeStyle=`rgba(160,225,255,${(a*0.25).toFixed(3)})`;
-      ctx.lineWidth=1;
+      ctx.lineWidth=1*U;
       ctx.beginPath();ctx.arc(p.x,p.y,p.r*0.82,0,Math.PI*2);ctx.stroke();
     }
   }
@@ -809,7 +846,7 @@ function draw(){
   ctx.translate(ox,oy);
   ctx.fillStyle='rgba(130,220,255,0.045)';
   for(let y=0;y<ROWS;y++)for(let x=0;x<COLS;x++)
-    ctx.fillRect(x*CELL+CELL/2-1,y*CELL+CELL/2-1,2,2);
+    ctx.fillRect(x*CELL+CELL/2-U,y*CELL+CELL/2-U,2*U,2*U);
   if(grid)drawCells();
   if(food&&grid&&state!=='title')drawFood();
   if(snake&&(state==='playing'||state==='dead'))drawSnake();
