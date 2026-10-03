@@ -6,7 +6,8 @@
 <meta name="theme-color" content="#04070d">
 <title>SONAR SNAKE</title>
 <style>
-  html,body{margin:0;height:100%;background:#04070d;color:#9adcd0;font-family:ui-monospace,Menlo,Consolas,'Courier New',monospace;overflow:hidden;overscroll-behavior:none;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+  html{height:100%;background:#04070d;text-size-adjust:100%;-webkit-text-size-adjust:100%}
+  body{margin:0;position:fixed;inset:0;width:100%;overflow:hidden;background:#04070d;color:#9adcd0;font-family:ui-monospace,Menlo,Consolas,'Courier New',monospace;overscroll-behavior:none;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
   #wrap{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:12px;box-sizing:border-box;padding:calc(12px + env(safe-area-inset-top)) calc(12px + env(safe-area-inset-right)) calc(12px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left))}
   #hud{display:flex;flex-wrap:wrap;gap:14px;align-items:center;font-size:12px;letter-spacing:2px;color:#6fbfb0;text-transform:uppercase}
   #hud b{color:#e8fffa;font-weight:600}
@@ -35,6 +36,13 @@
   #panelbtns{display:flex;gap:8px;justify-content:center}
   [hidden]{display:none!important}
   #adslot{width:min(92vmin,648px);height:60px;flex:0 0 60px;margin-top:10px;border:1px dashed #1d3b45;border-radius:6px;display:flex;align-items:center;justify-content:center;color:#2f5f57;font-size:11px;letter-spacing:2px;text-transform:uppercase;overflow:hidden}
+  #stage,#hud,#adslot,#crt{touch-action:none}
+  #panel{touch-action:auto}
+  #lblist{touch-action:pan-y}
+  @media (max-width:600px){
+    #hud{gap:8px}
+    #hud button{padding:6px 12px;font-size:12px}
+  }
 </style>
 </head>
 <body>
@@ -72,6 +80,12 @@
 const COLS=27,ROWS=27,CELL=24;
 
 const cv=document.getElementById('cv'),ctx=cv.getContext('2d');
+let cvScale=1;
+function updScale(){const w=cv.getBoundingClientRect().width;if(w>0)cvScale=w/648;}
+window.addEventListener('resize',updScale);
+window.addEventListener('orientationchange',()=>setTimeout(updScale,300));
+updScale();
+function fs(base){return Math.round(base*Math.min(2,Math.max(1,11.5/(base*cvScale))));}
 const scoreEl=document.getElementById('score'),bestEl=document.getElementById('best'),
       levelEl=document.getElementById('level'),flashdots=document.getElementById('flashdots'),
       panel=document.getElementById('panel'),lform=document.getElementById('lform'),
@@ -502,23 +516,28 @@ function drawTitle(){
   ctx.strokeStyle=`rgba(140,225,255,${((1-cyc)*0.35).toFixed(3)})`;
   ctx.lineWidth=2;
   ctx.beginPath();ctx.arc(cv.width/2,cv.height/2,40+cyc*260,0,Math.PI*2);ctx.stroke();
+  const touch=matchMedia('(pointer:coarse)').matches;
   const hasLS='letterSpacing'in ctx;
-  if(hasLS)ctx.letterSpacing='14px';
+  if(hasLS)ctx.letterSpacing='12px';
   ctx.fillStyle='#e6fffa';
   ctx.font='bold 58px ui-monospace,Menlo,monospace';
-  ctx.fillText('SONAR',cv.width/2+7,cv.height/2-58);
-  ctx.fillText('SNAKE',cv.width/2+7,cv.height/2+8);
+  ctx.fillText('SONAR',cv.width/2+6,cv.height/2-70);
+  ctx.fillText('SNAKE',cv.width/2+6,cv.height/2-6);
   if(hasLS)ctx.letterSpacing='0px';
-  ctx.fillStyle='#7fd8c8';ctx.font='15px ui-monospace,monospace';
-  ctx.fillText('the maze exists only where you listen',cv.width/2,cv.height/2+52);
-  ctx.fillStyle='#4d8a80';ctx.font='12px ui-monospace,monospace';
-  ctx.fillText('move: arrows / wasd / swipe   ·   ping: space / tap — 3 per level   ·   mute: m',cv.width/2,cv.height/2+96);
-  ctx.fillText('eat the amber beacon to grow   ·   its arrow guides you   ·   unseen walls are fatal',cv.width/2,cv.height/2+118);
+  const s13=fs(13),s15=fs(15);
+  let y=cv.height/2+36;
+  ctx.fillStyle='#7fd8c8';ctx.font=`${s15}px ui-monospace,monospace`;
+  ctx.fillText('the maze exists only where you listen',cv.width/2,y);
+  y+=s13*1.4;
+  ctx.fillStyle='#4d8a80';ctx.font=`${s13}px ui-monospace,monospace`;
+  const lines=touch
+    ?['swipe — move','tap — ping · 3 per level','eat beacons to grow · unseen walls kill','ranks button — leaderboard']
+    :['arrows / wasd — move','space — ping · 3 per level','eat beacons to grow · unseen walls kill','L — leaderboard · M — mute'];
+  for(const ln of lines){ctx.fillText(ln,cv.width/2,y);y+=s13*1.8;}
+  y+=s13*0.8;
   ctx.fillStyle=`rgba(230,255,250,${(0.5+0.5*Math.sin(tGlobal*3)).toFixed(3)})`;
-  ctx.font='14px ui-monospace,monospace';
-  ctx.fillText('press any key to dive',cv.width/2,cv.height/2+156);
-  ctx.fillStyle='#4d8a80';ctx.font='12px ui-monospace,monospace';
-  ctx.fillText('L / ranks — leaderboard',cv.width/2,cv.height/2+182);
+  ctx.font=`${fs(16)}px ui-monospace,monospace`;
+  ctx.fillText(touch?'tap anywhere to dive':'press any key to dive',cv.width/2,y);
 }
 
 function drawDead(){
@@ -527,14 +546,15 @@ function drawDead(){
   if(hasLS)ctx.letterSpacing='8px';
   ctx.fillStyle='#ff7a70';
   ctx.font='bold 44px ui-monospace,Menlo,monospace';
-  ctx.fillText('GAME OVER',cv.width/2+4,cv.height/2-30);
+  ctx.fillText('GAME OVER',cv.width/2+4,cv.height/2-36);
   if(hasLS)ctx.letterSpacing='0px';
-  ctx.fillStyle='#cfe8e2';ctx.font='16px ui-monospace,monospace';
-  ctx.fillText(`score ${score}   ·   best ${best}   ·   level ${level}`,cv.width/2,cv.height/2+12);
+  ctx.fillStyle='#cfe8e2';ctx.font=`${fs(16)}px ui-monospace,monospace`;
+  ctx.fillText(`score ${score}   ·   best ${best}   ·   level ${level}`,cv.width/2,cv.height/2+8);
   if(deathT>0.6){
+    const touch=matchMedia('(pointer:coarse)').matches;
     ctx.fillStyle=`rgba(230,255,250,${(0.5+0.5*Math.sin(tGlobal*3)).toFixed(3)})`;
-    ctx.font='14px ui-monospace,monospace';
-    ctx.fillText('press R or tap to dive again',cv.width/2,cv.height/2+52);
+    ctx.font=`${fs(15)}px ui-monospace,monospace`;
+    ctx.fillText(touch?'tap to dive again':'press R to dive again',cv.width/2,cv.height/2+52);
   }
 }
 
@@ -601,6 +621,10 @@ window.addEventListener('keydown',e=>{
   if(k===' '){flash(false);return;}
   if(KEYDIRS[k])queueDir(KEYDIRS[k]);
 });
+
+document.addEventListener('touchmove',e=>{
+  if(e.target!==cv&&!panel.contains(e.target))e.preventDefault();
+},{passive:false});
 
 let touchStart=null;
 function pressAction(){
