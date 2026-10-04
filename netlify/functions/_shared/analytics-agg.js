@@ -18,7 +18,8 @@ const NUMS = [
   'events', 'loads', 'touch', 'runs', 'runsEnded', 'scoreSum', 'maxScore', 'secondsSum',
   'pingsSum', 'emptyPingsSum', 'firstFoodCount', 'firstFoodSum', 'noFoodRuns',
   'lbOpens', 'lbSubmits', 'mutes', 'abandons', 'abandonsDuringRun', 'levelUps',
-  'adBefore', 'adAfter', 'adBreaks', 'adRewards', 'sessionStarts', 'versionT',
+  'adBefore', 'adAfter', 'adBreaks', 'adRewards', 'adOffers', 'adAccepts', 'adDismisses',
+  'adLeaves', 'adLeavesDuring', 'adLeavesAfter', 'sessionStarts', 'versionT',
   'clientN', 'sessionN', 'sessionRunN', 'sessionMsN'
 ];
 
@@ -29,13 +30,14 @@ const BOOLS = [
 
 const MAPS = [
   'clients', 'sessions', 'byForm', 'byPointer', 'abandonByLocation', 'levelUpByLevel',
-  'deathCause', 'levelFunnel', 'deathCells', 'adBreakStatus', 'sessionRuns', 'sessionMs',
+  'deathCause', 'levelFunnel', 'deathCells', 'adBreakStatus', 'adDismissReason', 'sessionRuns', 'sessionMs',
   'names', 'seen'
 ];
 
 const KNOWN = new Set([
   'load', 'run_start', 'run_end', 'level_up', 'lb_open', 'lb_submit', 'mute', 'abandon',
-  'session_start', 'session_ping', 'session_end', 'before_ad', 'after_ad', 'ad_break_done', 'ad_reward'
+  'session_start', 'session_ping', 'session_end', 'before_ad', 'after_ad', 'ad_break_done', 'ad_reward',
+  'ad_offer', 'ad_accept', 'ad_dismiss', 'ad_leave'
 ]);
 
 function safeKey(k) {
@@ -257,9 +259,25 @@ export function applyEvent(agg, ev) {
     case 'session_end':
       noteSession(agg, ev.sessionId, p.durationMs);
       break;
+    // before_ad is the ad actually showing. Offer, accept, dismiss, and leave
+    // sit around it so a review can see churn during or just after that ad.
     case 'before_ad': agg.adBefore++; break;
     case 'after_ad': agg.adAfter++; break;
     case 'ad_reward': agg.adRewards++; break;
+    case 'ad_offer': agg.adOffers++; break;
+    case 'ad_accept': agg.adAccepts++; break;
+    case 'ad_dismiss': {
+      agg.adDismisses++;
+      const why = typeof p.reason === 'string' && p.reason ? p.reason.slice(0, 16) : 'unknown';
+      bump(agg.adDismissReason, why);
+      break;
+    }
+    case 'ad_leave': {
+      agg.adLeaves++;
+      if (p.when === 'during') agg.adLeavesDuring++;
+      else if (p.when === 'after') agg.adLeavesAfter++;
+      break;
+    }
     case 'ad_break_done': {
       agg.adBreaks++;
       const st = typeof p.breakStatus === 'string' && p.breakStatus ? p.breakStatus.slice(0, 32) : 'unknown';
@@ -311,6 +329,7 @@ export function summarize(shards, opts = {}) {
     levelFunnel: Object.create(null),
     deathCells: Object.create(null),
     adBreakStatus: Object.create(null),
+    adDismissReason: Object.create(null),
     names: Object.create(null)
   };
   const gaps = [];
@@ -422,10 +441,18 @@ export function summarize(shards, opts = {}) {
     avgSessionSeconds: avg(durationSum / 1000, durations.length),
     medianSessionSeconds: medianDur != null ? Math.round(medianDur / 100) / 10 : null,
     adImpressions: totals.adBefore,
+    adShown: totals.adBefore,
     adAfter: totals.adAfter,
     adBreaks: totals.adBreaks,
     adBreakStatus: { ...maps.adBreakStatus },
     adRewards: totals.adRewards,
+    adOffers: totals.adOffers,
+    adAccepts: totals.adAccepts,
+    adDismisses: totals.adDismisses,
+    adDismissReason: { ...maps.adDismissReason },
+    adLeaves: totals.adLeaves,
+    adLeavesDuring: totals.adLeavesDuring,
+    adLeavesAfter: totals.adLeavesAfter,
     activeDays: days,
     activeDayClientsExact: !dayClientOverflow,
     eventNames: { ...maps.names }

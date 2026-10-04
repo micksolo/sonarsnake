@@ -122,15 +122,16 @@ let state='title',grid=null,snake=null,dir={x:1,y:0},dirQueue=[],food=null,pings
 let best=Number(localStorage.getItem('sonarsnake_best')||0);
 bestEl.textContent=best;
 
-const GAME_VERSION='1.2.0';
+const GAME_VERSION='1.3.0';
 function uuid(){return crypto.randomUUID?crypto.randomUUID():'u'+Date.now().toString(36)+Math.random().toString(36).slice(2);}
 let cid=localStorage.getItem('ss_cid');
 if(!cid){cid=uuid();try{localStorage.setItem('ss_cid',cid);}catch(e){}}
 const sid=uuid();
 const sessionStartT=Date.now();
 const aq=[];
-let runCount=0,lastRunEndT=null,runStats=null,leaveTracked=false,runsFinished=0;
+let runCount=0,lastRunEndT=null,runStats=null,leaveTracked=false;
 let adsReady=false,adHold=false,adHoldStarted=0,adHoldAccum=0,adBreakBusy=false,rewardGen=0,rewardShow=null;
+let adOfferOpen=false,adLeave=null;
 function track(name,props){
   aq.push({name,props:props||{},t:Date.now()});
   if(aq.length>=10)flushAnalytics();
@@ -171,12 +172,28 @@ function noteSession(reason){
     const end=state==='playing'?now:(lastRunEndT||now);
     runMs=Math.max(0,end-runStats.startT-adHoldAccum);
   }
+  const duringAd=!!(adLeave&&adLeave.phase==='during');
+  const afterAd=!!(adLeave&&adLeave.phase==='after');
   leaveTracked=true;
+  if(adOfferOpen&&!duringAd){
+    adOfferOpen=false;
+    rewardShow=null;
+    pbtnreward.hidden=true;
+    track('ad_dismiss',{breakType:'reward',breakName:'continue-run',reason:'left'});
+  }
+  if(adLeave){
+    track('ad_leave',{
+      when:adLeave.phase,breakType:adLeave.breakType,breakName:adLeave.breakName,
+      sinceAdMs:Math.max(0,now-adLeave.at),startedRun:false,reason
+    });
+    adLeave=null;
+  }
   track('abandon',{
     location:state,panel:!panel.hidden,durationMs,runMs,
-    level:state==='title'?0:level,score:state==='title'?0:score,reason
+    level:state==='title'?0:level,score:state==='title'?0:score,reason,
+    duringAd,afterAd
   });
-  track('session_end',{durationMs,location:state,runs:runCount,reason});
+  track('session_end',{durationMs,location:state,runs:runCount,reason,duringAd,afterAd});
 }
 function sessionPing(){
   if(leaveTracked)return;
@@ -210,10 +227,34 @@ function normalizeAds(raw){
 function syncAdSound(){
   if(typeof window.adConfig==='function')window.adConfig({sound:muted?'off':'on'});
 }
-function beginAdHold(){
+function beginAdHold(type,name){
   if(adHold)return;
   adHold=true;
   adHoldStarted=Date.now();
+  adLeave={phase:'during',breakType:type||'',breakName:name||'',at:Date.now()};
+}
+function clearAdLeave(){adLeave=null;}
+function finishShownAd(){
+  if(!adLeave||adLeave.phase!=='during')return;
+  if(state==='playing'){adLeave=null;return;}
+  adLeave.phase='after';
+  adLeave.at=Date.now();
+}
+function declineRewardOffer(reason){
+  if(!adOfferOpen)return;
+  adOfferOpen=false;
+  rewardShow=null;
+  pbtnreward.hidden=true;
+  track('ad_dismiss',{breakType:'reward',breakName:'continue-run',reason:reason||'skipped'});
+}
+function acceptReward(){
+  const show=rewardShow;
+  rewardShow=null;
+  pbtnreward.hidden=true;
+  if(!show)return;
+  adOfferOpen=false;
+  track('ad_accept',{breakType:'reward',breakName:'continue-run'});
+  show();
 }
 function endAdHold(){
   if(!adHold)return;
@@ -269,40 +310,8 @@ async function initAds(){
   if(cfg.enabled)armAds(cfg);
 }
 initAds();
-function requestInterstitialThen(startFn){
-  if(!adsReady||runsFinished<1||adBreakBusy||typeof window.adBreak!=='function'){startFn();return;}
-  adBreakBusy=true;
-  let settled=false;
-  const finish=()=>{
-    if(settled)return;
-    settled=true;
-    adBreakBusy=false;
-    endAdHold();
-    startFn();
-  };
-  const quick=setTimeout(()=>{if(!adHold)finish();},5000);
-  const slow=setTimeout(finish,120000);
-  try{
-    window.adBreak({
-      type:'next',
-      name:'restart-game',
-      beforeAd:()=>{
-        clearTimeout(quick);
-        beginAdHold();
-        track('before_ad',{breakType:'next',breakName:'restart-game'});
-      },
-      afterAd:()=>{track('after_ad',{breakType:'next',breakName:'restart-game'});},
-      adBreakDone:(info)=>{
-        clearTimeout(quick);clearTimeout(slow);
-        endAdHold();
-        track('ad_break_done',placementProps(info,'next','restart-game'));
-        finish();
-      }
-    });
-  }catch(e){clearTimeout(quick);clearTimeout(slow);finish();}
-}
 function offerContinueAd(){
-  if(!adsReady||adBreakBusy||adHold||state!=='dead'||typeof window.adBreak!=='function')return;
+  if(!adsReady||adBreakBusy||adHold||state!=='dead'||score<=0||typeof window.adBreak!=='function')return;
   const gen=rewardGen;
   adBreakBusy=true;
   try{
@@ -310,18 +319,25 @@ function offerContinueAd(){
       type:'reward',
       name:'continue-run',
       beforeReward:(showAdFn)=>{
-        if(gen!==rewardGen||state!=='dead')return;
+        if(gen!==rewardGen||state!=='dead'||score<=0)return;
         rewardShow=()=>{showAdFn();};
         pbtnreward.hidden=false;
+        if(!adOfferOpen){
+          adOfferOpen=true;
+          track('ad_offer',{breakType:'reward',breakName:'continue-run'});
+        }
       },
       beforeAd:()=>{
-        beginAdHold();
+        if(gen!==rewardGen)return;
+        beginAdHold('reward','continue-run');
         track('before_ad',{breakType:'reward',breakName:'continue-run'});
       },
       adDismissed:()=>{
         if(gen!==rewardGen)return;
         rewardShow=null;
         pbtnreward.hidden=true;
+        adOfferOpen=false;
+        track('ad_dismiss',{breakType:'reward',breakName:'continue-run',reason:'ad'});
       },
       adViewed:()=>{
         rewardShow=null;
@@ -330,9 +346,14 @@ function offerContinueAd(){
         track('ad_reward',{breakName:'continue-run'});
         reviveRun();
       },
-      afterAd:()=>{track('after_ad',{breakType:'reward',breakName:'continue-run'});},
+      afterAd:()=>{
+        if(gen!==rewardGen)return;
+        track('after_ad',{breakType:'reward',breakName:'continue-run'});
+      },
       adBreakDone:(info)=>{
+        if(gen!==rewardGen)return;
         endAdHold();
+        finishShownAd();
         adBreakBusy=false;
         track('ad_break_done',placementProps(info,'reward','continue-run'));
       }
@@ -341,6 +362,7 @@ function offerContinueAd(){
 }
 function reviveRun(){
   if(!grid)return;
+  clearAdLeave();
   state='playing';
   deathT=0;
   deathPanelShown=false;
@@ -629,10 +651,7 @@ sndbtn.addEventListener('click',e=>{
 });
 pbtnreward.addEventListener('click',e=>{
   e.currentTarget.blur();
-  const show=rewardShow;
-  rewardShow=null;
-  pbtnreward.hidden=true;
-  if(show)show();
+  acceptReward();
 });
 lbbtn.addEventListener('click',e=>{
   if(adHold)return;
@@ -665,6 +684,7 @@ function flash(free){
 }
 
 function beginRun(){
+  clearAdLeave();
   score=0;level=1;foods=0;moveInterval=260;moveAcc=0;
   flashes=3;flashHold=0;
   pings=[];flashT=0;deathT=0;beaconT=0;
@@ -684,10 +704,12 @@ function beginRun(){
 }
 function newGame(){
   if(adHold)return;
+  declineRewardOffer('skipped');
   rewardGen++;
   rewardShow=null;
   pbtnreward.hidden=true;
-  requestInterstitialThen(beginRun);
+  adBreakBusy=false;
+  beginRun();
 }
 
 function levelUp(){
@@ -708,7 +730,6 @@ function levelUp(){
 
 function die(cause,deathX,deathY){
   state='dead';deathT=0;
-  runsFinished++;
   for(const c of grid){c.reveal=1;c.seen=true;}
   shakeT=shakeMax=0.5;shakeAmp=9;
   lastRunEndT=Date.now();
