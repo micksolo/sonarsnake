@@ -511,7 +511,9 @@ function addWalls(){
       if(!isSnakeCell(x,y)&&!(food&&food.x===x&&food.y===y))grid[i].wall=true;
     }
   }
-  if(!food||!R.has(idx(food.x,food.y)))spawnFood(R);
+  // The beacon just eaten is still on the head. A reachable cell is not a live
+  // pickup while the body covers it — the tail takes a few seconds to slide off.
+  if(!food||isSnakeCell(food.x,food.y)||!R.has(idx(food.x,food.y)))spawnFood(R);
 }
 
 function pingNote(text){
@@ -690,6 +692,9 @@ function levelUp(){
   level++;levelEl.textContent=level;
   track('level_up',{level});
   addWalls();
+  // Run start zeros this clock so the beacon blinks immediately. A level change
+  // used to leave it mid-cycle, so the new pickup stayed dark for up to a few seconds.
+  beaconT=0;
   moveInterval=Math.max(150,moveInterval-8);
   flashT=0.9;
   flashes=3;updateFlashHUD('recharge');
