@@ -37,10 +37,13 @@ function loadAds(){
     'endAdHold', 'placementProps', 'noteSession', 'offerContinueAd', 'reviveRun',
     'openSnake', 'borderClear', 'carveOpen', 'beginRun', 'newGame'
   ];
+  const grace = html.match(/const START_GRACE=\d+(?:\.\d+)?;/);
+  assert.ok(grace, 'start grace constant');
   const src = [
     'const COLS=18,ROWS=18;',
     'const OPEN_LEN=5;',
     'const OPEN_CLEAR=6;',
+    grace[0],
     'const idx=(x,y)=>y*COLS+x;',
     ...names.map((name) => extract(html, name))
   ].join('\n');
