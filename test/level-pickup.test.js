@@ -127,6 +127,57 @@ test('an ordinary eat still scores and replaces the pickup without restarting th
   assert.equal(context.died, null);
 });
 
+test('a level change adds fewer walls than the old batch, and later levels add more', () => {
+  function samples(level){
+    const added = [];
+    for (let n = 0; n < 40; n++) {
+      const context = loadGame();
+      openBoard(context);
+      context.level = level;
+      context.snake = [];
+      for (let i = 0; i < 8; i++) context.snake.push({x: 8 - i, y: 8});
+      context.food = {x: 14, y: 3};
+      const before = context.grid.reduce((k, c) => k + (c.wall ? 1 : 0), 0);
+      context.addWalls();
+      const after = context.grid.reduce((k, c) => k + (c.wall ? 1 : 0), 0);
+      added.push(after - before);
+    }
+    return added;
+  }
+  const early = samples(2);
+  const later = samples(8);
+  const mean = (xs) => xs.reduce((s, v) => s + v, 0) / xs.length;
+  const earlyMean = mean(early);
+  const laterMean = mean(later);
+  assert.ok(Math.max(...early) <= 18, `level 2 dumped ${Math.max(...early)} walls`);
+  assert.ok(earlyMean < 14, `level 2 averaged ${earlyMean} walls`);
+  assert.ok(Math.max(...later) <= 36, `level 8 dumped ${Math.max(...later)} walls`);
+  assert.ok(laterMean > earlyMean, `later levels (${laterMean}) should tighten more than early ones (${earlyMean})`);
+  assert.match(html, /wallCount<COLS\*ROWS\*0\.5/);
+});
+
+test('walls still fill toward the half-board cap over a run', () => {
+  const count = (context) => context.grid.reduce((k, c) => k + (c.wall ? 1 : 0), 0);
+  for (let n = 0; n < 12; n++) {
+    const context = loadGame();
+    context.level = 1;
+    context.genMaze();
+    context.spawnFood();
+    const cap = context.COLS * context.ROWS * 0.5;
+    context.level = 2;
+    context.addWalls();
+    const early = count(context);
+    assert.ok(early < cap - 40, `level 2 already has ${early} walls`);
+    for (let lv = 3; lv <= 14; lv++) {
+      context.level = lv;
+      context.addWalls();
+    }
+    const late = count(context);
+    assert.ok(late > early + 40, `walls only grew from ${early} to ${late}`);
+    assert.ok(late >= cap - 20, `run ended at ${late}, short of the ${cap} cap`);
+  }
+});
+
 test('hitting a wall still ends the run', () => {
   const context = loadGame();
   openBoard(context);

@@ -494,11 +494,13 @@ function addWalls(){
     grid[idx(mx,y)].wall=true;
     wallCount+=mx===x?1:2;
   };
-  const runs=4+Math.min(level,8);
+  // Short mirrored strokes. The count climbs with level, and placement
+  // still stops once half the board is wall.
+  const runs=2+Math.min(Math.floor(level/2),5);
   for(let i=0;i<runs;i++){
     let x=1+Math.floor(Math.random()*(COLS-2)),y=1+Math.floor(Math.random()*(ROWS-2));
     const d=[[1,0],[-1,0],[0,1],[0,-1]][Math.floor(Math.random()*4)];
-    const len=2+Math.floor(Math.random()*3);
+    const len=1+Math.floor(Math.random()*2);
     for(let j=0;j<len;j++){
       if(wallCount<COLS*ROWS*0.5&&canPlace(x,y))place(x,y);
       x+=d[0];y+=d[1];
