@@ -116,13 +116,13 @@ const scoreEl=document.getElementById('score'),bestEl=document.getElementById('b
       sndbtn=document.getElementById('sndbtn'),lbbtn=document.getElementById('lbbtn');
 
 let state='title',grid=null,snake=null,dir={x:1,y:0},dirQueue=[],food=null,pings=[],
-    score=0,level=1,foods=0,moveInterval=260,moveAcc=0,flashes=3,flashHold=0,
+    score=0,level=1,foods=0,moveInterval=260,moveAcc=0,startGrace=0,flashes=3,flashHold=0,
     tGlobal=0,deathT=0,flashT=0,firePulse=0,pingBanner=null,shakeT=0,shakeMax=1,shakeAmp=0,beaconT=0,muted=false,
     submitted=false,deathPanelShown=false;
 let best=Number(localStorage.getItem('sonarsnake_best')||0);
 bestEl.textContent=best;
 
-const GAME_VERSION='1.3.0';
+const GAME_VERSION='1.4.0';
 function uuid(){return crypto.randomUUID?crypto.randomUUID():'u'+Date.now().toString(36)+Math.random().toString(36).slice(2);}
 let cid=localStorage.getItem('ss_cid');
 if(!cid){cid=uuid();try{localStorage.setItem('ss_cid',cid);}catch(e){}}
@@ -431,6 +431,10 @@ function computeReachable(sx,sy){
 // border already is, and leaves the opening heading clear to that border.
 const OPEN_LEN=5;
 const OPEN_CLEAR=6;
+// The centred spawn faces the border about seven cells ahead, which at the
+// opening speed is under two seconds. Hold still at the start of every run
+// long enough to turn, then move on that heading.
+const START_GRACE=1;
 function openSnake(len){
   const y=Math.floor((ROWS-1)/2);
   let tail=Math.floor((COLS-len)/2);
@@ -685,7 +689,7 @@ function flash(free){
 
 function beginRun(){
   clearAdLeave();
-  score=0;level=1;foods=0;moveInterval=260;moveAcc=0;
+  score=0;level=1;foods=0;moveInterval=260;moveAcc=0;startGrace=START_GRACE;
   flashes=3;flashHold=0;
   pings=[];flashT=0;deathT=0;beaconT=0;
   submitted=false;deathPanelShown=false;
@@ -777,8 +781,13 @@ function update(dt){
   if(firePulse>0)firePulse=Math.max(0,firePulse-dt);
   if(pingBanner){pingBanner.t-=dt;if(pingBanner.t<=0)pingBanner=null;}
   if(state==='playing'){
-    moveAcc+=dt*1000;
-    while(moveAcc>=moveInterval&&state==='playing'){moveAcc-=moveInterval;step();}
+    if(startGrace>0){
+      startGrace-=dt;
+      if(startGrace<=0){startGrace=0;step();}
+    }else{
+      moveAcc+=dt*1000;
+      while(moveAcc>=moveInterval&&state==='playing'){moveAcc-=moveInterval;step();}
+    }
   }else if(state==='dead'){
     deathT+=dt;
     if(score>0&&!submitted&&!deathPanelShown&&deathT>0.8){deathPanelShown=true;showPanel(true,'death');offerContinueAd();}
@@ -869,7 +878,8 @@ function drawSnake(){
     rrect(s.x*CELL+2*U,s.y*CELL+2*U,CELL-4*U,CELL-4*U,7*U);
   }
   const h=snake[0],ex=(h.x+0.5)*CELL,ey=(h.y+0.5)*CELL;
-  const fx=dir.x*4*U,fy=dir.y*4*U,sx=-dir.y*4*U,sy=dir.x*4*U;
+  const face=startGrace>0&&dirQueue.length?dirQueue[0]:dir;
+  const fx=face.x*4*U,fy=face.y*4*U,sx=-face.y*4*U,sy=face.x*4*U;
   ctx.fillStyle='#04070d';
   ctx.beginPath();ctx.arc(ex+fx+sx,ey+fy+sy,2.4*U,0,Math.PI*2);ctx.fill();
   ctx.beginPath();ctx.arc(ex+fx-sx,ey+fy-sy,2.4*U,0,Math.PI*2);ctx.fill();
@@ -1049,20 +1059,26 @@ cv.addEventListener('pointerdown',e=>{
   else pressAction();
 });
 cv.addEventListener('pointermove',e=>{
-  if(e.pointerType!=='touch'||!touchStart||state!=='playing')return;
+  if(e.pointerType!=='touch'||!touchStart)return;
   const dx=e.clientX-touchStart.x,dy=e.clientY-touchStart.y;
-  if(Math.hypot(dx,dy)>=18){
-    const d=Math.abs(dx)>Math.abs(dy)?[Math.sign(dx),0]:[0,Math.sign(dy)];
-    queueDir(d);
-    touchStart.dragged=true;
-    touchStart={x:e.clientX,y:e.clientY,dragged:true};
-  }
+  if(Math.hypot(dx,dy)<18)return;
+  const d=Math.abs(dx)>Math.abs(dy)?[Math.sign(dx),0]:[0,Math.sign(dy)];
+  if(state==='playing')queueDir(d);
+  else if(!touchStart.dir)touchStart.dir=d;
+  touchStart.dragged=true;
+  touchStart.x=e.clientX;
+  touchStart.y=e.clientY;
 });
 cv.addEventListener('pointerup',e=>{
   if(e.pointerType!=='touch'||!touchStart)return;
-  const wasDrag=touchStart.dragged;
+  const gesture=touchStart;
   touchStart=null;
-  if(!wasDrag)pressAction();
+  if(!gesture.dragged){pressAction();return;}
+  if(state==='playing')return;
+  if(state==='title'||(state==='dead'&&deathT>0.5)){
+    newGame();
+    if(gesture.dir)queueDir(gesture.dir);
+  }
 });
 
 let last=performance.now();
