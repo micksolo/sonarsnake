@@ -6,6 +6,7 @@ import {
   emptyAgg,
   foldLive,
   loadSummary,
+  normalizeAgg,
   shardOf,
   summarize
 } from '../netlify/functions/_shared/analytics-agg.js';
@@ -114,6 +115,13 @@ test('summary counts level-ups, device, session length, abandons, and ads past 8
   assert.equal(summary.leaderboardSubmits, 1);
   assert.equal(summary.mutes, 1);
   assert.equal(summary.adImpressions, 1);
+  assert.equal(summary.adShown, 1);
+  assert.equal(summary.adOffers, 0);
+  assert.equal(summary.adAccepts, 0);
+  assert.equal(summary.adDismisses, 0);
+  assert.equal(summary.adLeaves, 0);
+  assert.equal(summary.adLeavesDuring, 0);
+  assert.equal(summary.adLeavesAfter, 0);
   assert.equal(summary.adAfter, 1);
   assert.equal(summary.adBreaks, 1);
   assert.equal(summary.adBreakStatus.viewed, 1);
@@ -124,6 +132,49 @@ test('summary counts level-ups, device, session length, abandons, and ads past 8
   assert.equal(summary.firstFoodRate, 50);
   assert.equal(Object.hasOwn(summary, 'playingNow'), false);
   assert.equal(summary.eventNames.level_up, 8003);
+});
+
+test('ad funnel counts offer, accept, dismiss, show, and leave without dropping older ad events', () => {
+  const agg = emptyAgg();
+  applyEvent(agg, ev('ad_offer', { breakType: 'reward', breakName: 'continue-run' }));
+  applyEvent(agg, ev('ad_accept', { breakType: 'reward', breakName: 'continue-run' }));
+  applyEvent(agg, ev('before_ad', { breakType: 'reward', breakName: 'continue-run' }));
+  applyEvent(agg, ev('ad_dismiss', { breakType: 'reward', breakName: 'continue-run', reason: 'ad' }));
+  applyEvent(agg, ev('ad_leave', { when: 'after', breakName: 'continue-run', startedRun: false }));
+  applyEvent(agg, ev('ad_offer', { breakType: 'reward', breakName: 'continue-run' }, { sessionId: 'session-b', clientId: 'client-b' }));
+  applyEvent(agg, ev('ad_dismiss', { reason: 'skipped' }, { sessionId: 'session-b', clientId: 'client-b' }));
+  applyEvent(agg, ev('ad_offer', { breakType: 'reward', breakName: 'continue-run' }, { sessionId: 'session-c', clientId: 'client-c' }));
+  applyEvent(agg, ev('ad_accept', { breakType: 'reward', breakName: 'continue-run' }, { sessionId: 'session-c', clientId: 'client-c' }));
+  applyEvent(agg, ev('before_ad', { breakType: 'reward', breakName: 'continue-run' }, { sessionId: 'session-c', clientId: 'client-c' }));
+  applyEvent(agg, ev('ad_leave', { when: 'during', startedRun: false }, { sessionId: 'session-c', clientId: 'client-c' }));
+  applyEvent(agg, ev('after_ad', { breakType: 'reward', breakName: 'continue-run' }));
+  applyEvent(agg, ev('ad_break_done', { breakType: 'reward', breakName: 'continue-run', breakStatus: 'dismissed' }));
+  applyEvent(agg, ev('ad_reward', { breakName: 'continue-run' }));
+  for (let i = 0; i < 60; i++) applyEvent(agg, ev('custom_name_' + i, {}, { t: 1_700_000_000_000 + i }));
+
+  const summary = summarize([normalizeAgg(JSON.parse(JSON.stringify(agg)))], { scanComplete: true });
+  assert.equal(summary.adOffers, 3);
+  assert.equal(summary.adAccepts, 2);
+  assert.equal(summary.adDismisses, 2);
+  assert.equal(summary.adDismissReason.ad, 1);
+  assert.equal(summary.adDismissReason.skipped, 1);
+  assert.equal(summary.adShown, 2);
+  assert.equal(summary.adImpressions, 2);
+  assert.equal(summary.adLeaves, 2);
+  assert.equal(summary.adLeavesDuring, 1);
+  assert.equal(summary.adLeavesAfter, 1);
+  assert.equal(summary.adAfter, 1);
+  assert.equal(summary.adBreaks, 1);
+  assert.equal(summary.adBreakStatus.dismissed, 1);
+  assert.equal(summary.adRewards, 1);
+  assert.equal(summary.eventNames.ad_offer, 3);
+  assert.equal(summary.eventNames.ad_accept, 2);
+  assert.equal(summary.eventNames.ad_dismiss, 2);
+  assert.equal(summary.eventNames.before_ad, 2);
+  assert.equal(summary.eventNames.ad_leave, 2);
+  assert.equal(summary.eventNames.ad_reward, 1);
+  assert.equal(summary.eventNames.after_ad, 1);
+  assert.equal(summary.eventNames.ad_break_done, 1);
 });
 
 test('session length comes only from stored durations', () => {
