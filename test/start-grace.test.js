@@ -139,8 +139,8 @@ function advance(game, seconds){
   for (let i = 0; i < frames; i++) game.update(0.05);
 }
 
-test('version 1.5.1 keeps a small see-through 3, 2, 1', () => {
-  assert.match(html, /const GAME_VERSION='1\.5\.1';/);
+test('version 1.5.2 keeps a small brighter 3, 2, 1 in the corner', () => {
+  assert.match(html, /const GAME_VERSION='1\.5\.2';/);
   const beat = html.match(/const COUNT_BEAT=(\d+(?:\.\d+)?);/);
   const from = html.match(/const COUNT_FROM=(\d+);/);
   const grace = html.match(/const START_GRACE=(\d+(?:\.\d+)?);/);
@@ -154,10 +154,47 @@ test('version 1.5.1 keeps a small see-through 3, 2, 1', () => {
   assert.match(countdown, /fillText\(String\(n\)/);
   assert.match(countdown, /strokeText\(String\(n\)/);
   assert.match(countdown, /fs\(34\)/);
-  assert.match(countdown, /rgba\(232,255,250,0\.78\)/);
+  assert.match(countdown, /rgba\(248,255,253,0\.98\)/);
+  assert.match(countdown, /rgba\(2,10,8,0\.95\)/);
   assert.match(countdown, /textAlign='right'/);
+  assert.match(countdown, /cv\.width-8/);
   assert.doesNotMatch(countdown, /arc\(|beginPath|fs\(156\)/);
   assert.doesNotMatch(extract(html, 'reviveRun'), /startGrace|COUNT_FROM|drawCountdown/);
+});
+
+test('the opening ping stays lit through 1 and fades after the snake moves', () => {
+  const game = loadGame();
+  game.beginRun();
+  for (const c of game.grid) c.reveal = 1;
+  game.flashHold = 0.55;
+  const head = game.snake[0].x;
+  advance(game, 2.2);
+  assert.equal(game.countLeft(), 1);
+  assert.equal(game.snake[0].x, head);
+  for (const c of game.grid) assert.ok(c.reveal > 0.95);
+  advance(game, 0.8);
+  assert.equal(game.startGrace, 0);
+  assert.equal(game.snake[0].x, head + 1);
+  assert.ok(game.grid[0].reveal > 0.9);
+  const lit = game.grid[0].reveal;
+  advance(game, 0.5);
+  assert.ok(game.grid[0].reveal < lit - 0.4);
+  assert.ok(game.grid[0].reveal > 0.2);
+});
+
+test('a ping during normal play still holds briefly, then fades', () => {
+  const game = loadGame();
+  game.beginRun();
+  game.startGrace = 0;
+  for (const c of game.grid) c.reveal = 1;
+  game.flashHold = 0.55;
+  advance(game, 0.3);
+  assert.ok(game.grid[0].reveal > 0.95);
+  assert.ok(game.flashHold > 0);
+  advance(game, 0.5);
+  assert.ok(game.flashHold <= 0);
+  assert.ok(game.grid[0].reveal < 0.85);
+  assert.ok(game.grid[0].reveal > 0);
 });
 
 test('the overlay counts 3, then 2, then 1, and the snake moves after 1', () => {
