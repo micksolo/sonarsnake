@@ -40,9 +40,14 @@ function between(from, to){
 
 function loadGame(){
   const grace = html.match(/const START_GRACE=(\d+(?:\.\d+)?);/);
-  assert.ok(grace, 'start grace constant');
+  const beat = html.match(/const COUNT_BEAT=(\d+(?:\.\d+)?);/);
+  const from = html.match(/const COUNT_FROM=(\d+);/);
+  assert.ok(grace && beat && from, 'countdown constants');
   const src = [
+    beat[0],
+    from[0],
     grace[0],
+    extract(html, 'countLeft'),
     extract(html, 'beginRun'),
     extract(html, 'step'),
     extract(html, 'update'),
@@ -52,6 +57,8 @@ function loadGame(){
     Math,
     Date,
     START_GRACE: Number(grace[1]),
+    COUNT_BEAT: Number(beat[1]),
+    COUNT_FROM: Number(from[1]),
     state: 'title',
     grid: [],
     snake: null,
@@ -132,12 +139,44 @@ function advance(game, seconds){
   for (let i = 0; i < frames; i++) game.update(0.05);
 }
 
-test('the game version moves past the 1.3.0 straight-start deaths', () => {
-  assert.match(html, /const GAME_VERSION='1\.4\.0';/);
+test('version 1.5.0 counts 3, 2, 1 for about a second each', () => {
+  assert.match(html, /const GAME_VERSION='1\.5\.0';/);
+  const beat = html.match(/const COUNT_BEAT=(\d+(?:\.\d+)?);/);
+  const from = html.match(/const COUNT_FROM=(\d+);/);
   const grace = html.match(/const START_GRACE=(\d+(?:\.\d+)?);/);
-  assert.ok(grace);
-  const seconds = Number(grace[1]);
-  assert.ok(seconds >= 0.75 && seconds <= 1.25, `grace ${seconds}s should be long enough to turn and short of feeling stuck`);
+  assert.ok(beat && from && grace);
+  assert.equal(Number(beat[1]), 1);
+  assert.equal(Number(from[1]), 3);
+  assert.equal(Number(grace[1]), Number(from[1]) * Number(beat[1]));
+  const draw = extract(html, 'draw');
+  const countdown = extract(html, 'drawCountdown');
+  assert.match(draw, /drawCountdown\(\)/);
+  assert.match(countdown, /fillText\(String\(n\)/);
+  assert.match(countdown, /strokeText\(String\(n\)/);
+  assert.match(countdown, /fs\(156\)/);
+  assert.doesNotMatch(extract(html, 'reviveRun'), /startGrace|COUNT_FROM|drawCountdown/);
+});
+
+test('the overlay counts 3, then 2, then 1, and the snake moves after 1', () => {
+  const game = loadGame();
+  game.beginRun();
+  assert.equal(game.countLeft(), 3);
+  const head = { ...game.snake[0] };
+  advance(game, 0.5);
+  assert.equal(game.countLeft(), 3);
+  assert.equal(game.snake[0].x, head.x);
+  assert.equal(game.snake[0].y, head.y);
+  advance(game, 1);
+  assert.equal(game.countLeft(), 2);
+  assert.equal(game.snake[0].x, head.x);
+  advance(game, 1);
+  assert.equal(game.countLeft(), 1);
+  assert.equal(game.snake[0].x, head.x);
+  advance(game, 0.5);
+  assert.equal(game.countLeft(), 0);
+  assert.equal(game.startGrace, 0);
+  assert.equal(game.snake[0].x, head.x + 1);
+  assert.equal(game.snake[0].y, head.y);
 });
 
 test('a new run sits still, keeps a turn made during the pause, then moves that way', () => {
