@@ -144,8 +144,8 @@ function advance(game, seconds){
   for (let i = 0; i < frames; i++) game.update(0.05);
 }
 
-test('version 1.5.3 puts a solid 3, 2, 1 above the CRT vignette', () => {
-  assert.match(html, /const GAME_VERSION='1\.5\.3';/);
+test('version 1.5.4 puts a solid 3, 2, 1 above the CRT vignette', () => {
+  assert.match(html, /const GAME_VERSION='1\.5\.4';/);
   const beat = html.match(/const COUNT_BEAT=(\d+(?:\.\d+)?);/);
   const from = html.match(/const COUNT_FROM=(\d+);/);
   const grace = html.match(/const START_GRACE=(\d+(?:\.\d+)?);/);

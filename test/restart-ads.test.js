@@ -130,6 +130,18 @@ test('the client no longer requests an interstitial before a new run', () => {
   assert.doesNotMatch(restart, /adBreak\(|interstitial|type:'next'|requestInterstitialThen/);
 });
 
+test('players never see a banner placeholder under the board', () => {
+  assert.equal(html.includes('paste ad code here'), false);
+  assert.equal(html.includes('id="adslot"'), false);
+  assert.equal(html.includes('#adslot{'), false);
+  const arm = extract(html, 'armAds');
+  assert.match(arm, /pagead\/js\/adsbygoogle\.js/);
+  assert.match(arm, /window\.adBreak=/);
+  assert.doesNotMatch(arm, /adslot/);
+  assert.match(html, /type:'reward'/);
+  assert.match(html, /name:'continue-run'/);
+});
+
 test('a restart, including the first one after a scored death, goes straight into play', () => {
   const game = loadAds();
   game.offerContinueAd();
