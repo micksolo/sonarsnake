@@ -51,7 +51,8 @@ function loadGame(){
     extract(html, 'beginRun'),
     extract(html, 'step'),
     extract(html, 'update'),
-    extract(html, 'queueDir')
+    extract(html, 'queueDir'),
+    extract(html, 'drawCountdown')
   ].join('\n');
   const context = {
     Math,
@@ -104,7 +105,11 @@ function loadGame(){
     tone(){},
     showPanel(){},
     offerContinueAd(){},
-    die(cause){ context.state = 'dead'; context.died = cause; }
+    die(cause){ context.state = 'dead'; context.died = cause; },
+    countEl: { hidden: true, textContent: '' }
+  };
+  context.document = {
+    getElementById(id){ return id === 'count' ? context.countEl : null; }
   };
   context.idx = (x, y) => y * context.COLS + x;
   context.inB = (x, y) => x >= 0 && y >= 0 && x < context.COLS && y < context.ROWS;
@@ -139,8 +144,8 @@ function advance(game, seconds){
   for (let i = 0; i < frames; i++) game.update(0.05);
 }
 
-test('version 1.5.2 keeps a small brighter 3, 2, 1 in the corner', () => {
-  assert.match(html, /const GAME_VERSION='1\.5\.2';/);
+test('version 1.5.3 puts a solid 3, 2, 1 above the CRT vignette', () => {
+  assert.match(html, /const GAME_VERSION='1\.5\.3';/);
   const beat = html.match(/const COUNT_BEAT=(\d+(?:\.\d+)?);/);
   const from = html.match(/const COUNT_FROM=(\d+);/);
   const grace = html.match(/const START_GRACE=(\d+(?:\.\d+)?);/);
@@ -148,18 +153,62 @@ test('version 1.5.2 keeps a small brighter 3, 2, 1 in the corner', () => {
   assert.equal(Number(beat[1]), 1);
   assert.equal(Number(from[1]), 3);
   assert.equal(Number(grace[1]), Number(from[1]) * Number(beat[1]));
+  const crtAt = html.indexOf('id="crt"');
+  const countAt = html.indexOf('id="count"');
+  assert.ok(crtAt > 0 && countAt > crtAt, 'the digit must be painted after the CRT overlay');
+  const rule = html.match(/#count\{[^}]+\}/);
+  assert.ok(rule, 'countdown chip style');
+  assert.match(rule[0], /z-index:4/);
+  assert.match(rule[0], /left:50%/);
+  assert.match(rule[0], /background:#07141a/);
+  assert.match(rule[0], /color:#f7fffd/);
+  assert.doesNotMatch(rule[0], /right:\s*\d|cv\.width/);
   const draw = extract(html, 'draw');
   const countdown = extract(html, 'drawCountdown');
   assert.match(draw, /drawCountdown\(\)/);
-  assert.match(countdown, /fillText\(String\(n\)/);
-  assert.match(countdown, /strokeText\(String\(n\)/);
-  assert.match(countdown, /fs\(34\)/);
-  assert.match(countdown, /rgba\(248,255,253,0\.98\)/);
-  assert.match(countdown, /rgba\(2,10,8,0\.95\)/);
-  assert.match(countdown, /textAlign='right'/);
-  assert.match(countdown, /cv\.width-8/);
-  assert.doesNotMatch(countdown, /arc\(|beginPath|fs\(156\)/);
+  assert.match(countdown, /getElementById\('count'\)/);
+  assert.match(countdown, /textContent=String\(n\)/);
+  assert.doesNotMatch(countdown, /fillText|strokeText|cv\.width-8|textBaseline/);
+  assert.match(html, /#crt\{[^}]*radial-gradient\(ellipse at center, transparent 55%, rgba\(0,0,0,\.5\) 100%\)/);
   assert.doesNotMatch(extract(html, 'reviveRun'), /startGrace|COUNT_FROM|drawCountdown/);
+});
+
+test('the chip reads 3, then 2, then 1 while the opening maze stays lit', () => {
+  const game = loadGame();
+  game.beginRun();
+  for (const c of game.grid) c.reveal = 1;
+  game.flashHold = 0.55;
+  const shown = () => {
+    game.drawCountdown();
+    return { n: game.countEl.textContent, hidden: game.countEl.hidden, reveal: game.grid[0].reveal };
+  };
+  let view = shown();
+  assert.equal(view.n, '3');
+  assert.equal(view.hidden, false);
+  assert.ok(view.reveal > 0.95);
+  advance(game, 1.1);
+  view = shown();
+  assert.equal(view.n, '2');
+  assert.equal(view.hidden, false);
+  assert.equal(game.snake[0].x, 10);
+  assert.ok(view.reveal > 0.95);
+  advance(game, 1);
+  view = shown();
+  assert.equal(view.n, '1');
+  assert.equal(view.hidden, false);
+  assert.equal(game.snake[0].x, 10);
+  assert.ok(view.reveal > 0.95);
+  advance(game, 1);
+  view = shown();
+  assert.equal(view.hidden, true);
+  assert.equal(view.n, '');
+  assert.equal(game.startGrace, 0);
+  assert.ok(game.snake[0].x > 10);
+  assert.ok(view.reveal < 0.95);
+  game.startGrace = 0;
+  game.state = 'playing';
+  game.drawCountdown();
+  assert.equal(game.countEl.hidden, true);
 });
 
 test('the opening ping stays lit through 1 and fades after the snake moves', () => {
