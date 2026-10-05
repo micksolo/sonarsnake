@@ -122,7 +122,7 @@ let state='title',grid=null,snake=null,dir={x:1,y:0},dirQueue=[],food=null,pings
 let best=Number(localStorage.getItem('sonarsnake_best')||0);
 bestEl.textContent=best;
 
-const GAME_VERSION='1.4.0';
+const GAME_VERSION='1.5.0';
 function uuid(){return crypto.randomUUID?crypto.randomUUID():'u'+Date.now().toString(36)+Math.random().toString(36).slice(2);}
 let cid=localStorage.getItem('ss_cid');
 if(!cid){cid=uuid();try{localStorage.setItem('ss_cid',cid);}catch(e){}}
@@ -431,10 +431,11 @@ function computeReachable(sx,sy){
 // border already is, and leaves the opening heading clear to that border.
 const OPEN_LEN=5;
 const OPEN_CLEAR=6;
-// The centred spawn faces the border about seven cells ahead, which at the
-// opening speed is under two seconds. Hold still at the start of every run
-// long enough to turn, then move on that heading.
-const START_GRACE=1;
+// 3, 2, 1 over the board, one second each, then the first step. A turn during
+// the count is the heading. A rewarded revive does not start a count.
+const COUNT_BEAT=1;
+const COUNT_FROM=3;
+const START_GRACE=3;
 function openSnake(len){
   const y=Math.floor((ROWS-1)/2);
   let tail=Math.floor((COLS-len)/2);
@@ -783,7 +784,7 @@ function update(dt){
   if(state==='playing'){
     if(startGrace>0){
       startGrace-=dt;
-      if(startGrace<=0){startGrace=0;step();}
+      if(startGrace<=1e-4){startGrace=0;step();}
     }else{
       moveAcc+=dt*1000;
       while(moveAcc>=moveInterval&&state==='playing'){moveAcc-=moveInterval;step();}
@@ -1001,6 +1002,35 @@ function draw(){
     ctx.fillStyle=`rgba(255,50,50,${((0.5-deathT)*0.5).toFixed(3)})`;
     ctx.fillRect(0,0,cv.width,cv.height);
   }
+  drawCountdown();
+}
+
+function countLeft(){
+  if(startGrace<=0)return 0;
+  const n=Math.ceil(startGrace/COUNT_BEAT);
+  return n>COUNT_FROM?COUNT_FROM:n;
+}
+function drawCountdown(){
+  const n=state==='playing'?countLeft():0;
+  if(!n)return;
+  const age=n*COUNT_BEAT-startGrace;
+  const pop=age<0.16?1-age/0.16:0;
+  const size=Math.round(Math.max(156,fs(156))*(1+pop*0.14));
+  const x=cv.width/2,y=Math.round(cv.height*0.30);
+  ctx.save();
+  ctx.textAlign='center';
+  ctx.textBaseline='middle';
+  ctx.fillStyle='rgba(4,7,13,0.72)';
+  ctx.beginPath();
+  ctx.arc(x,y,size*0.62,0,Math.PI*2);
+  ctx.fill();
+  ctx.lineWidth=Math.max(10,size*0.07);
+  ctx.strokeStyle='#04140f';
+  ctx.fillStyle='#e8fffa';
+  ctx.font=`bold ${size}px ui-monospace,Menlo,monospace`;
+  ctx.strokeText(String(n),x,y);
+  ctx.fillText(String(n),x,y);
+  ctx.restore();
 }
 
 const KEYDIRS={ArrowUp:[0,-1],ArrowDown:[0,1],ArrowLeft:[-1,0],ArrowRight:[1,0],
