@@ -178,6 +178,108 @@ test('walls still fill toward the half-board cap over a run', () => {
   }
 });
 
+function assertPlayable(context){
+  const f = context.food;
+  assert.ok(f, 'a pickup was placed');
+  assert.equal(context.grid[context.idx(f.x, f.y)].wall, false);
+  assert.equal(context.snake.some(s => s.x === f.x && s.y === f.y), false);
+  const head = context.snake[0];
+  const reach = context.floodOpen(head.x, head.y);
+  const dist = Math.max(Math.abs(f.x - head.x), Math.abs(f.y - head.y));
+  const deg = context.openDegree(f.x, f.y);
+  const cul = context.isCulDeSac(f.x, f.y);
+  if (deg >= 2 && !cul && dist > 3 && reach.has(context.idx(f.x, f.y))) return;
+  let strict = 0;
+  for (let y = 1; y < context.ROWS - 1; y++){
+    for (let x = 1; x < context.COLS - 1; x++){
+      if (context.grid[context.idx(x, y)].wall) continue;
+      if (context.snake.some(s => s.x === x && s.y === y)) continue;
+      if (Math.max(Math.abs(x - head.x), Math.abs(y - head.y)) <= 3) continue;
+      if (!reach.has(context.idx(x, y))) continue;
+      if (context.openDegree(x, y) < 2) continue;
+      if (context.isCulDeSac(x, y)) continue;
+      strict++;
+      break;
+    }
+    if (strict) break;
+  }
+  assert.equal(strict, 0, `pickup at ${f.x},${f.y} deg ${deg} cul ${cul} dist ${dist} ignored a safe cell`);
+}
+
+test('a pickup does not spawn in the boxed-in corner', () => {
+  for (let n = 0; n < 30; n++){
+    const context = loadGame();
+    openBoard(context);
+    context.grid[context.idx(16, 15)].wall = true;
+    context.snake = [];
+    for (let i = 0; i < 5; i++) context.snake.push({x: 10 - i, y: 8});
+    context.spawnFood();
+    assert.ok(!(context.food.x === 16 && context.food.y === 16));
+    assert.ok(context.openDegree(context.food.x, context.food.y) >= 2);
+    assert.equal(context.isCulDeSac(context.food.x, context.food.y), false);
+  }
+});
+
+test('a pickup does not spawn inside a 1-wide dead-end corridor', () => {
+  for (let n = 0; n < 20; n++){
+    const context = loadGame();
+    openBoard(context);
+    for (let x = 8; x <= 16; x++) context.grid[context.idx(x, 15)].wall = true;
+    context.snake = [];
+    for (let i = 0; i < 5; i++) context.snake.push({x: 4 - i, y: 8});
+    context.spawnFood();
+    assert.ok(context.food.y !== 16 || context.food.x < 8, `corridor cell ${context.food.x},${context.food.y}`);
+    assertPlayable(context);
+  }
+});
+
+test('a crowded board still places a pickup', () => {
+  const context = loadGame();
+  openBoard(context);
+  for (let y = 1; y < context.ROWS - 1; y++){
+    for (let x = 1; x < context.COLS - 1; x++){
+      if (y !== 8) context.grid[context.idx(x, y)].wall = true;
+    }
+  }
+  context.snake = [];
+  for (let i = 0; i < 5; i++) context.snake.push({x: 8 - i, y: 8});
+  context.spawnFood();
+  assert.ok(context.food);
+  assert.equal(context.grid[context.idx(context.food.x, context.food.y)].wall, false);
+  assert.equal(context.snake.some(s => s.x === context.food.x && s.y === context.food.y), false);
+  assert.equal(context.food.y, 8);
+});
+
+test('walls that trap an existing pickup move it', () => {
+  const context = loadGame();
+  openBoard(context);
+  context.snake = [];
+  for (let i = 0; i < 5; i++) context.snake.push({x: 10 - i, y: 8});
+  context.food = {x: 16, y: 16};
+  context.grid[context.idx(16, 15)].wall = true;
+  assert.equal(context.openDegree(16, 16), 1);
+  context.level = 2;
+  context.addWalls();
+  assert.ok(!(context.food.x === 16 && context.food.y === 16), 'the corner beacon was left in a dead end');
+  assertPlayable(context);
+});
+
+test('pickups across levels stay out of dead ends', () => {
+  for (let n = 0; n < 16; n++){
+    const context = loadGame();
+    const start = 1 + (n % 6);
+    context.level = start;
+    context.genMaze();
+    context.spawnFood();
+    assertPlayable(context);
+    for (let lv = start + 1; lv <= start + 4; lv++){
+      context.level = lv;
+      context.addWalls();
+      assertPlayable(context);
+    }
+  }
+});
+
 test('hitting a wall still ends the run', () => {
   const context = loadGame();
   openBoard(context);

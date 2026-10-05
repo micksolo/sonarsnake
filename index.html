@@ -121,7 +121,7 @@ let state='title',grid=null,snake=null,dir={x:1,y:0},dirQueue=[],food=null,pings
 let best=Number(localStorage.getItem('sonarsnake_best')||0);
 bestEl.textContent=best;
 
-const GAME_VERSION='1.5.4';
+const GAME_VERSION='1.5.5';
 function uuid(){return crypto.randomUUID?crypto.randomUUID():'u'+Date.now().toString(36)+Math.random().toString(36).slice(2);}
 let cid=localStorage.getItem('ss_cid');
 if(!cid){cid=uuid();try{localStorage.setItem('ss_cid',cid);}catch(e){}}
@@ -489,19 +489,102 @@ function genMaze(){
   dir={x:1,y:0};dirQueue=[];
 }
 
-function spawnFood(R){
-  if(!R)R=computeReachable(snake[0].x,snake[0].y);
-  const head=snake[0],cands=[];
-  for(const i of R){
-    if(grid[i].wall)continue;
-    const x=i%COLS,y=Math.floor(i/COLS);
-    if(!isSnakeCell(x,y)&&Math.max(Math.abs(x-head.x),Math.abs(y-head.y))>3)cands.push({x,y});
+// Open neighbours ignore walls and the whole snake. The tail will move, but
+// eating grows the snake, so counting the tail as free would hide a dead end.
+function openDegree(x,y){
+  let n=0;
+  for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]){
+    const nx=x+dx,ny=y+dy;
+    if(!inB(nx,ny)||grid[idx(nx,ny)].wall||isSnakeCell(nx,ny))continue;
+    n++;
   }
-  if(!cands.length)for(let i=0;i<grid.length;i++){
-    const x=i%COLS,y=Math.floor(i/COLS);
-    if(!grid[i].wall&&!isSnakeCell(x,y))cands.push({x,y});
+  return n;
+}
+function floodOpen(sx,sy,skipX,skipY){
+  const seen=new Set();
+  if(!inB(sx,sy)||(sx===skipX&&sy===skipY)||grid[idx(sx,sy)].wall)return seen;
+  const q=[sx,sy];
+  seen.add(idx(sx,sy));
+  for(let qi=0;qi<q.length;qi+=2){
+    const x=q[qi],y=q[qi+1];
+    for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]){
+      const nx=x+dx,ny=y+dy;
+      if(!inB(nx,ny)||(nx===skipX&&ny===skipY))continue;
+      const i=idx(nx,ny);
+      if(seen.has(i)||grid[i].wall||isSnakeCell(nx,ny))continue;
+      seen.add(i);q.push(nx,ny);
+    }
   }
-  food=cands.length?cands[Math.floor(Math.random()*cands.length)]:null;
+  return seen;
+}
+function wayAround(x,y,ns){
+  const parent=ns.map((_,i)=>i);
+  const find=i=>{while(parent[i]!==i)i=parent[i]=parent[parent[i]];return i;};
+  const join=(a,b)=>{a=find(a);b=find(b);if(a!==b)parent[a]=b;};
+  for(let a=0;a<ns.length;a++)for(let b=a+1;b<ns.length;b++){
+    const [ax,ay]=ns[a],[bx,by]=ns[b];
+    let linked=Math.abs(ax-bx)+Math.abs(ay-by)===1;
+    if(!linked)for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]){
+      const px=ax+dx,py=ay+dy;
+      if((px===x&&py===y)||!inB(px,py)||grid[idx(px,py)].wall||isSnakeCell(px,py))continue;
+      if(Math.abs(px-bx)+Math.abs(py-by)===1){linked=true;break;}
+    }
+    if(linked)join(a,b);
+  }
+  const root=find(0);
+  for(let i=1;i<ns.length;i++)if(find(i)!==root)return false;
+  return true;
+}
+// A dead end has one open neighbour. A 1-wide pocket is the same trap one
+// cell back: block the candidate and any side that no longer reaches the head
+// is a cul-de-sac unless that side has room to turn (a cell with 3 open ways).
+function isCulDeSac(x,y){
+  const ns=[];
+  for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]){
+    const nx=x+dx,ny=y+dy;
+    if(!inB(nx,ny)||grid[idx(nx,ny)].wall||isSnakeCell(nx,ny))continue;
+    ns.push([nx,ny]);
+  }
+  if(ns.length<2)return true;
+  // Neighbours that already join around the cell are not a 1-wide pocket.
+  if(wayAround(x,y,ns))return false;
+  const head=snake[0],outside=floodOpen(head.x,head.y,x,y);
+  for(const [nx,ny] of ns){
+    if(outside.has(idx(nx,ny)))continue;
+    const pocket=floodOpen(nx,ny,x,y);
+    let wide=false;
+    for(const i of pocket){
+      if(openDegree(i%COLS,Math.floor(i/COLS))>=3){wide=true;break;}
+    }
+    if(!wide)return true;
+  }
+  return false;
+}
+function pickCell(list){
+  return list[Math.floor(Math.random()*list.length)];
+}
+function spawnFood(){
+  const head=snake[0],reach=floodOpen(head.x,head.y);
+  const preferred=[],strict=[],scored=[];
+  for(let y=1;y<ROWS-1;y++)for(let x=1;x<COLS-1;x++){
+    const i=idx(x,y);
+    if(grid[i].wall||isSnakeCell(x,y))continue;
+    const dist=Math.max(Math.abs(x-head.x),Math.abs(y-head.y));
+    const deg=openDegree(x,y);
+    const ok=reach.has(i);
+    const cul=ok&&deg>=2&&dist>3?isCulDeSac(x,y):deg<2;
+    const score=(ok?300:0)+(cul?0:80)+deg*25+(dist>3?40:0)+Math.min(dist,10);
+    scored.push({x,y,score});
+    if(!ok||cul||deg<2||dist<=3)continue;
+    strict.push({x,y});
+    if(deg>=3)preferred.push({x,y});
+  }
+  const pool=preferred.length?preferred:strict;
+  if(pool.length){food=pickCell(pool);return;}
+  if(!scored.length){food=null;return;}
+  let best=-1;
+  for(const c of scored)if(c.score>best)best=c.score;
+  food=pickCell(scored.filter(c=>c.score===best));
 }
 
 function addWalls(){
@@ -541,9 +624,9 @@ function addWalls(){
       if(!isSnakeCell(x,y)&&!(food&&food.x===x&&food.y===y))grid[i].wall=true;
     }
   }
-  // The beacon just eaten is still on the head. A reachable cell is not a live
-  // pickup while the body covers it — the tail takes a few seconds to slide off.
-  if(!food||isSnakeCell(food.x,food.y)||!R.has(idx(food.x,food.y)))spawnFood(R);
+  // The beacon just eaten is still on the head. New blocks can also close the
+  // cell the beacon already occupied, so a trapped pickup is placed again.
+  if(!food||isSnakeCell(food.x,food.y)||!R.has(idx(food.x,food.y))||openDegree(food.x,food.y)<2||isCulDeSac(food.x,food.y))spawnFood();
 }
 
 function pingNote(text){
