@@ -51,8 +51,7 @@
   #panel button:hover{background:#123240;color:#e8fffa}
   #panelbtns{display:flex;gap:8px;justify-content:center}
   [hidden]{display:none!important}
-  #adslot{box-sizing:border-box;width:min(84vmin,540px,calc(100svh - 220px));height:60px;flex:0 0 60px;margin-top:10px;border:1px dashed #1d3b45;border-radius:6px;display:flex;align-items:center;justify-content:center;color:#2f5f57;font-size:11px;letter-spacing:2px;text-transform:uppercase;overflow:hidden}
-  #stage,#hud,#adslot,#crt{touch-action:none}
+  #stage,#hud,#crt{touch-action:none}
   #panel{touch-action:auto}
   #lblist{touch-action:pan-y}
   @media (max-width:600px){
@@ -91,8 +90,6 @@
       </div>
     </div>
   </div>
-  <!-- H5 Games Ads are full-screen Ad Placement breaks. This box stays until ADSENSE_CLIENT or ads.config.json has a publisher id. -->
-  <div id="adslot"><span>ad slot · paste ad code here once approved</span></div>
 </div>
 <script>
 (()=>{
@@ -124,7 +121,7 @@ let state='title',grid=null,snake=null,dir={x:1,y:0},dirQueue=[],food=null,pings
 let best=Number(localStorage.getItem('sonarsnake_best')||0);
 bestEl.textContent=best;
 
-const GAME_VERSION='1.5.3';
+const GAME_VERSION='1.5.4';
 function uuid(){return crypto.randomUUID?crypto.randomUUID():'u'+Date.now().toString(36)+Math.random().toString(36).slice(2);}
 let cid=localStorage.getItem('ss_cid');
 if(!cid){cid=uuid();try{localStorage.setItem('ss_cid',cid);}catch(e){}}
@@ -294,8 +291,6 @@ function armAds(cfg){
   if(cfg.frequencyHint)s.setAttribute('data-ad-frequency-hint',cfg.frequencyHint);
   if(cfg.test)s.setAttribute('data-adbreak-test','on');
   document.head.appendChild(s);
-  const slot=document.getElementById('adslot');
-  if(slot)slot.hidden=true;
 }
 async function initAds(){
   let cfg={enabled:false};
