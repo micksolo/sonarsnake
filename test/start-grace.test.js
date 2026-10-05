@@ -139,8 +139,8 @@ function advance(game, seconds){
   for (let i = 0; i < frames; i++) game.update(0.05);
 }
 
-test('version 1.5.0 counts 3, 2, 1 for about a second each', () => {
-  assert.match(html, /const GAME_VERSION='1\.5\.0';/);
+test('version 1.5.1 keeps a small see-through 3, 2, 1', () => {
+  assert.match(html, /const GAME_VERSION='1\.5\.1';/);
   const beat = html.match(/const COUNT_BEAT=(\d+(?:\.\d+)?);/);
   const from = html.match(/const COUNT_FROM=(\d+);/);
   const grace = html.match(/const START_GRACE=(\d+(?:\.\d+)?);/);
@@ -153,7 +153,10 @@ test('version 1.5.0 counts 3, 2, 1 for about a second each', () => {
   assert.match(draw, /drawCountdown\(\)/);
   assert.match(countdown, /fillText\(String\(n\)/);
   assert.match(countdown, /strokeText\(String\(n\)/);
-  assert.match(countdown, /fs\(156\)/);
+  assert.match(countdown, /fs\(34\)/);
+  assert.match(countdown, /rgba\(232,255,250,0\.78\)/);
+  assert.match(countdown, /textAlign='right'/);
+  assert.doesNotMatch(countdown, /arc\(|beginPath|fs\(156\)/);
   assert.doesNotMatch(extract(html, 'reviveRun'), /startGrace|COUNT_FROM|drawCountdown/);
 });
 
