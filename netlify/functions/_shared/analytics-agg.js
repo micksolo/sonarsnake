@@ -345,7 +345,10 @@ export function summarize(shards, opts = {}) {
 
   for (const shard of shards) {
     const a = shard && shard.v === 1 ? shard : normalizeAgg(shard);
-    for (const k of NUMS) totals[k] += a[k] || 0;
+    for (const k of NUMS) {
+      if (k === 'maxScore') totals.maxScore = Math.max(totals.maxScore || 0, a.maxScore || 0);
+      else totals[k] += a[k] || 0;
+    }
     clientOverflow = clientOverflow || a.clientOverflow;
     sessionOverflow = sessionOverflow || a.sessionOverflow;
     sessionRunOverflow = sessionRunOverflow || a.sessionRunOverflow;
@@ -615,17 +618,52 @@ export async function markLegacyPending(store) {
   }
 }
 
-export async function foldLive(store, clientId, events) {
+export async function foldLive(store, clientId, events, prefix = 'agg') {
   if (!events.length) return;
-  await mergeShard(store, `agg:${shardOf(clientId)}`, events, { trackSeen: false });
+  const head = prefix === 'agqt' ? 'agqt' : 'agg';
+  await mergeShard(store, `${head}:${shardOf(clientId)}`, events, { trackSeen: false });
 }
 
-const SHARD_KEY = /^(?:agg|leg):[0-9a-z]{2}$/;
+const SHARD_KEY = /^(?:agg|leg|agqt):[0-9a-z]{2}$/;
 
-export async function loadSummary(store) {
+export function eventKeyTime(key) {
+  const m = /^(?:eq|e):(\d+)/.exec(String(key || ''));
+  return m ? Number(m[1]) : 0;
+}
+
+// Newest events first, at most `limit` (default and cap 8000). Tester blobs
+// live under eq: and are skipped unless includeTesters is set. since/until
+// are millisecond bounds on the timestamp stored in the key.
+export function selectRecentKeys(keys, opts = {}) {
+  const cap = 8000;
+  let limit = Number(opts.limit);
+  if (!Number.isFinite(limit) || limit <= 0) limit = cap;
+  limit = Math.min(cap, Math.floor(limit));
+  const since = Number(opts.since) || 0;
+  const until = Number(opts.until) || 0;
+  const includeTesters = !!opts.includeTesters;
+  const picked = [];
+  for (const key of keys || []) {
+    const tester = String(key).startsWith('eq:');
+    const normal = String(key).startsWith('e:');
+    if (!tester && !normal) continue;
+    if (tester && !includeTesters) continue;
+    const t = eventKeyTime(key);
+    if (!t) continue;
+    if (since && t < since) continue;
+    if (until && t > until) continue;
+    picked.push(key);
+  }
+  picked.sort((a, b) => eventKeyTime(b) - eventKeyTime(a) || (a < b ? 1 : a > b ? -1 : 0));
+  return { keys: picked.slice(0, limit), truncated: picked.length > limit };
+}
+
+export async function loadSummary(store, opts = {}) {
   const meta = await backfillLegacy(store);
   const shards = [];
-  for (const prefix of ['agg:', 'leg:']) {
+  const prefixes = ['agg:', 'leg:'];
+  if (opts.includeTesters) prefixes.push('agqt:');
+  for (const prefix of prefixes) {
     const keys = await listKeys(store, prefix);
     for (const key of keys) {
       if (!SHARD_KEY.test(key)) continue;

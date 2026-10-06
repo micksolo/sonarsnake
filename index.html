@@ -121,7 +121,7 @@ let state='title',grid=null,snake=null,dir={x:1,y:0},dirQueue=[],food=null,pings
 let best=Number(localStorage.getItem('sonarsnake_best')||0);
 bestEl.textContent=best;
 
-const GAME_VERSION='1.5.5';
+const GAME_VERSION='1.5.6';
 function uuid(){return crypto.randomUUID?crypto.randomUUID():'u'+Date.now().toString(36)+Math.random().toString(36).slice(2);}
 let cid=localStorage.getItem('ss_cid');
 if(!cid){cid=uuid();try{localStorage.setItem('ss_cid',cid);}catch(e){}}
@@ -129,15 +129,21 @@ const sid=uuid();
 const sessionStartT=Date.now();
 const aq=[];
 let runCount=0,lastRunEndT=null,runStats=null,leaveTracked=false;
+// Playtests and automated runs: open the game with ?qa=1 (or ?qa=true).
+// Every analytics batch from that load is marked tester. The summary and the
+// raw export leave those events out unless the request sets includeTesters=1.
+const QA_TESTER=(()=>{try{const q=new URLSearchParams(location.search).get('qa');return q==='1'||q==='true';}catch(e){return false;}})();
 let adsReady=false,adHold=false,adHoldStarted=0,adHoldAccum=0,adBreakBusy=false,rewardGen=0,rewardShow=null;
 let adOfferOpen=false,adLeave=null;
 function track(name,props){
-  aq.push({name,props:props||{},t:Date.now()});
+  const p=Object.assign({},props);
+  if(QA_TESTER)p.tester=true;
+  aq.push({name,props:p,t:Date.now()});
   if(aq.length>=10)flushAnalytics();
 }
 function flushAnalytics(beacon){
   if(!aq.length)return;
-  const body=JSON.stringify({clientId:cid,sessionId:sid,gameVersion:GAME_VERSION,events:aq.splice(0,aq.length)});
+  const body=JSON.stringify({clientId:cid,sessionId:sid,gameVersion:GAME_VERSION,tester:QA_TESTER,events:aq.splice(0,aq.length)});
   try{
     if(beacon&&navigator.sendBeacon)navigator.sendBeacon('/api/analytics',new Blob([body],{type:'application/json'}));
     else fetch('/api/analytics',{method:'POST',headers:{'Content-Type':'application/json'},body,keepalive:true}).catch(()=>{});
@@ -194,17 +200,37 @@ function noteSession(reason){
   });
   track('session_end',{durationMs,location:state,runs:runCount,reason,duringAd,afterAd});
 }
+// Keep-alives are for someone actually here. A hidden tab, or a couple of
+// minutes with no key, click, or touch, stops them immediately. They start
+// again only after the tab is visible and the player touches the game.
+const PING_IDLE_MS=120000;
+let lastInputT=Date.now();
+let pingLive=true;
+function markActivity(){
+  lastInputT=Date.now();
+  if(document.visibilityState!=='hidden')pingLive=true;
+}
+function noteHidden(){pingLive=false;}
+function pingPaused(now){
+  const t=now||Date.now();
+  if(leaveTracked)return true;
+  if(document.visibilityState==='hidden')return true;
+  if(!pingLive)return true;
+  if(t-lastInputT>PING_IDLE_MS)return true;
+  return false;
+}
 function sessionPing(){
-  if(leaveTracked)return;
+  if(pingPaused())return;
   track('session_ping',{durationMs:Math.max(0,Date.now()-sessionStartT),location:state});
 }
 setInterval(()=>flushAnalytics(),15000);
 setInterval(sessionPing,30000);
 window.addEventListener('pagehide',()=>{noteSession('pagehide');flushAnalytics(true);});
-window.addEventListener('pageshow',e=>{if(e.persisted)leaveTracked=false;});
+window.addEventListener('pageshow',e=>{if(e.persisted){leaveTracked=false;noteHidden();}});
 document.addEventListener('visibilitychange',()=>{
-  if(document.visibilityState==='hidden'){sessionPing();flushAnalytics(true);}
+  if(document.visibilityState==='hidden'){noteHidden();flushAnalytics(true);}
 });
+for(const ev of ['keydown','pointerdown','touchstart'])window.addEventListener(ev,markActivity,{passive:true});
 track('session_start',{});
 track('load',deviceProps());
 

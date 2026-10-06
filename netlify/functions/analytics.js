@@ -3,7 +3,8 @@ import {
   foldLive,
   listKeys,
   loadSummary,
-  markLegacyPending
+  markLegacyPending,
+  selectRecentKeys
 } from './_shared/analytics-agg.js';
 
 const MAX_EVENTS = 50;
@@ -11,6 +12,10 @@ const RAW_CAP = 8000;
 
 function clampStr(v, n) {
   return String(v == null ? '' : v).slice(0, n);
+}
+
+function flagOn(v) {
+  return v === true || v === 1 || v === '1' || v === 'true';
 }
 
 function envGet(name) {
@@ -53,7 +58,9 @@ export default async (req) => {
     const events = Array.isArray(body.events) ? body.events.slice(0, MAX_EVENTS) : [];
     if (!clientId || !events.length) return new Response('ok', { status: 200 });
     const rnd = () => Math.random().toString(36).slice(2, 10);
-    const folded = [];
+    const batchTester = flagOn(body.tester);
+    const live = [];
+    const qa = [];
     const records = [];
     for (const ev of events) {
       const name = clampStr(ev && ev.name, 32).replace(/[^a-zA-Z_]/g, '');
@@ -63,22 +70,32 @@ export default async (req) => {
       let s;
       try { s = JSON.stringify(props); } catch (e) { s = '{}'; }
       if (s.length > 600) props = {};
+      const tester = batchTester || flagOn(props.tester);
+      if (tester) props.tester = true;
       const t = Number(ev.t) || Date.now();
-      folded.push({ clientId, sessionId, name, t, version: gameVersion, props });
-      records.push({ c: clientId, s: sessionId, n: name, t, v: gameVersion, p: props, rolled: true });
+      const row = { clientId, sessionId, name, t, version: gameVersion, props };
+      if (tester) qa.push(row);
+      else live.push(row);
+      records.push({ c: clientId, s: sessionId, n: name, t, v: gameVersion, p: props, q: tester ? 1 : 0, rolled: true });
     }
-    if (!folded.length) return new Response('ok', { status: 200 });
-    let rolled = true;
+    if (!records.length) return new Response('ok', { status: 200 });
+    let liveRolled = true;
+    let qaRolled = true;
     try {
-      await foldLive(store, clientId, folded);
+      if (live.length) await foldLive(store, clientId, live);
     } catch (e) {
-      rolled = false;
+      liveRolled = false;
+    }
+    try {
+      if (qa.length) await foldLive(store, clientId, qa, 'agqt');
+    } catch (e) {
+      qaRolled = false;
     }
     for (const rec of records) {
-      rec.rolled = rolled;
-      await store.set(`e:${rec.t}:${rnd()}`, JSON.stringify(rec));
+      rec.rolled = rec.q ? qaRolled : liveRolled;
+      await store.set(`${rec.q ? 'eq' : 'e'}:${rec.t}:${rnd()}`, JSON.stringify(rec));
     }
-    if (!rolled) {
+    if (!liveRolled) {
       try { await markLegacyPending(store); } catch (e) {}
     }
     return new Response('ok', { status: 200 });
@@ -90,25 +107,31 @@ export default async (req) => {
     const expect = envGet('ANALYTICS_TOKEN');
     if (!expect || token !== expect) return new Response('unauthorized', { status: 401 });
 
+    const includeTesters = flagOn(url.searchParams.get('includeTesters'));
     if (url.searchParams.get('raw')) {
-      const keys = (await listKeys(store, 'e:')).filter((k) => k.startsWith('e:')).sort();
-      const slice = keys.slice(0, RAW_CAP);
+      const keys = (await listKeys(store, 'e:')).filter((k) => k.startsWith('e:'));
+      if (includeTesters) keys.push(...(await listKeys(store, 'eq:')).filter((k) => k.startsWith('eq:')));
+      const picked = selectRecentKeys(keys, {
+        limit: url.searchParams.get('limit') || RAW_CAP,
+        since: url.searchParams.get('since'),
+        until: url.searchParams.get('until'),
+        includeTesters
+      });
       const raw = [];
-      const bodies = await mapPool(slice, 20, async (key) => {
+      const bodies = await mapPool(picked.keys, 20, async (key) => {
         try { return await store.get(key); } catch (e) { return null; }
       });
       for (const v of bodies) {
         if (!v) continue;
         try { raw.push(JSON.parse(v)); } catch (e) {}
       }
-      raw.sort((a, b) => a.t - b.t);
       return Response.json(raw, {
-        headers: { 'x-analytics-truncated': keys.length > RAW_CAP ? '1' : '0' }
+        headers: { 'x-analytics-truncated': picked.truncated ? '1' : '0' }
       });
     }
 
     try {
-      const summary = await loadSummary(store);
+      const summary = await loadSummary(store, { includeTesters });
       return Response.json(summary, { headers: { 'cache-control': 'no-store' } });
     } catch (e) {
       return new Response('summary failed', { status: 500 });
