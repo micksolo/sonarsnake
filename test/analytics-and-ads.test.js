@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import test from 'node:test';
+import vm from 'node:vm';
 import {
   applyEvent,
   backfillLegacy,
@@ -7,6 +9,7 @@ import {
   foldLive,
   loadSummary,
   normalizeAgg,
+  selectRecentKeys,
   shardOf,
   summarize
 } from '../netlify/functions/_shared/analytics-agg.js';
@@ -275,6 +278,94 @@ test('ads endpoint returns no publisher id when env is empty', async () => {
   const body = await res.json();
   assert.deepEqual(body, { enabled: false });
   if (prev != null) process.env.ADSENSE_CLIENT = prev;
+});
+
+test('summary best score is the highest run, not the sum across shards', () => {
+  const high = emptyAgg();
+  const low = emptyAgg();
+  applyEvent(high, ev('run_end', { cause: 'wall', score: 320, level: 2, seconds: 9 }));
+  applyEvent(low, ev('run_end', { cause: 'wall', score: 200, level: 1, seconds: 4 }, { clientId: 'client-b', sessionId: 'session-b' }));
+  applyEvent(low, ev('run_end', { cause: 'self', score: 150, level: 1, seconds: 3 }, { clientId: 'client-c', sessionId: 'session-c' }));
+  const summary = summarize([high, low]);
+  assert.equal(summary.maxScore, 320);
+  assert.equal(summary.avgScore, 223.3);
+  assert.equal(summary.runsEnded, 3);
+});
+
+test('tester rolls stay out of the summary unless includeTesters is set', async () => {
+  const store = memoryStore();
+  await foldLive(store, 'player-1', [ev('run_end', { cause: 'wall', score: 320, level: 2, seconds: 9 }, { clientId: 'player-1' })]);
+  await foldLive(store, 'qa-bot', [ev('run_end', { cause: 'wall', score: 9000, level: 9, seconds: 1, tester: true }, { clientId: 'qa-bot' })], 'agqt');
+  const summary = await loadSummary(store);
+  assert.equal(summary.maxScore, 320);
+  assert.equal(summary.runsEnded, 1);
+  const withTesters = await loadSummary(store, { includeTesters: true });
+  assert.equal(withTesters.maxScore, 9000);
+  assert.equal(withTesters.runsEnded, 2);
+});
+
+test('raw export keeps the newest events and skips tester keys by default', () => {
+  const keys = [];
+  for (let t = 1; t <= 10; t++) keys.push(`e:${t}:n`);
+  keys.push('eq:11:qa', 'eq:4:qa');
+  const recent = selectRecentKeys(keys, { limit: 3 });
+  assert.deepEqual(recent.keys, ['e:10:n', 'e:9:n', 'e:8:n']);
+  assert.equal(recent.truncated, true);
+  const ranged = selectRecentKeys(keys, { since: 3, until: 5 });
+  assert.deepEqual(ranged.keys, ['e:5:n', 'e:4:n', 'e:3:n']);
+  const withQa = selectRecentKeys(keys, { includeTesters: true, limit: 3 });
+  assert.deepEqual(withQa.keys, ['eq:11:qa', 'e:10:n', 'e:9:n']);
+  const capped = selectRecentKeys(Array.from({ length: 8002 }, (_, i) => `e:${i + 1}:k`), {});
+  assert.equal(capped.keys.length, 8000);
+  assert.equal(capped.keys[0], 'e:8002:k');
+  assert.equal(capped.truncated, true);
+});
+
+test('keep-alives pause when the tab is hidden or idle, and resume after a touch', () => {
+  const html = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  const start = html.indexOf('const PING_IDLE_MS');
+  const end = html.indexOf('setInterval(()=>flushAnalytics()');
+  assert.ok(start > 0 && end > start);
+  const tracked = [];
+  const document = { visibilityState: 'visible' };
+  const context = {
+    leaveTracked: false,
+    document,
+    Date,
+    sessionStartT: 1_000,
+    state: 'playing',
+    track(name, props){ tracked.push({ name, props }); }
+  };
+  vm.createContext(context);
+  vm.runInContext(html.slice(start, end), context);
+  assert.equal(context.pingPaused(Date.now()), false);
+  context.sessionPing();
+  assert.equal(tracked.length, 1);
+  assert.equal(tracked[0].name, 'session_ping');
+
+  document.visibilityState = 'hidden';
+  context.noteHidden();
+  tracked.length = 0;
+  context.sessionPing();
+  assert.equal(tracked.length, 0, 'a hidden tab does not ping');
+  assert.equal(context.pingPaused(), true);
+
+  document.visibilityState = 'visible';
+  context.sessionPing();
+  assert.equal(tracked.length, 0, 'showing the tab does not resume pings by itself');
+  context.markActivity();
+  assert.equal(context.pingPaused(Date.now()), false);
+  context.sessionPing();
+  assert.equal(tracked.length, 1);
+
+  context.markActivity();
+  assert.equal(context.pingPaused(Date.now() + 120001), true);
+  assert.equal(context.pingPaused(Date.now() + 120000), false);
+
+  assert.match(html, /q==='1'\|\|q==='true'/);
+  assert.match(html, /tester:QA_TESTER/);
+  assert.match(html, /if\(document\.visibilityState==='hidden'\)\{noteHidden\(\);flushAnalytics\(true\);\}/);
+  assert.doesNotMatch(html.slice(html.indexOf("document.addEventListener('visibilitychange'"), html.indexOf('track(\'session_start\'')), /sessionPing\(\)/);
 });
 
 test('leaderboard and analytics modules still load', async () => {
