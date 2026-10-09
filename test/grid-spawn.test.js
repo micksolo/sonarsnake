@@ -13,6 +13,7 @@ function loadMaze(){
   const context = {grid:null, snake:null, dir:null, dirQueue:null, level:1, COLS:0, ROWS:0};
   context.idx = (x,y)=>y*context.COLS+x;
   context.inB = (x,y)=>x>=0&&y>=0&&x<context.COLS&&y<context.ROWS;
+  context.isSnakeCell = (x,y)=>!!(context.snake&&context.snake.some(s=>s.x===x&&s.y===y));
   vm.createContext(context);
   const decl = html.match(/const COLS=(\d+),ROWS=(\d+),CELL=(\d+);/);
   assert.ok(decl, 'grid constants');
@@ -48,8 +49,20 @@ test('level 1 spawn is as far from walls as an 18x18 board allows', ()=>{
     context.level = 1;
     context.genMaze();
     assert.equal(context.snake.length, 5);
-    assert.equal(context.dir.x, 1);
-    assert.equal(context.dir.y, 0);
+    const head = context.snake[0];
+    const dirs = [[1, 0], [0, -1], [0, 1], [-1, 0]];
+    let best = -1;
+    for (const [dx, dy] of dirs) {
+      const nx = head.x + dx, ny = head.y + dy;
+      if (!context.inB(nx, ny) || context.grid[context.idx(nx, ny)].wall || context.isSnakeCell(nx, ny)) continue;
+      const score = context.straightClear(head.x, head.y, dx, dy) * 1000 + context.spaceAhead(head.x, head.y, dx, dy);
+      best = Math.max(best, score);
+    }
+    const facing = context.straightClear(head.x, head.y, context.dir.x, context.dir.y) * 1000
+      + context.spaceAhead(head.x, head.y, context.dir.x, context.dir.y);
+    assert.equal(facing, best, 'spawn faces the longest open run');
+    assert.equal(context.isSnakeCell(head.x + context.dir.x, head.y + context.dir.y), false);
+    assert.equal(context.dirQueue.length, 0);
     assert.equal(context.snake[0].x, 10);
     assert.equal(context.snake[0].y, 8);
     assert.equal(context.snake[4].x, 6);
@@ -66,8 +79,30 @@ test('level 1 spawn is as far from walls as an 18x18 board allows', ()=>{
       assert.equal(context.grid[8*18+x].wall, false, `heading cell ${x} is blocked`);
     }
     assert.equal(context.grid[8*18+17].wall, true);
-    assert.equal(nearestWall(context, 10, 8), 7, 'head should have 7 cells of heading before the border');
+    assert.equal(nearestWall(context, 10, 8), 7, 'head should have 7 cells of clearance before the border');
   }
+});
+
+test('the opening heading turns toward a longer clear run and never into the body', () => {
+  const context = loadMaze();
+  context.level = 1;
+  context.genMaze();
+  for (let x = 11; x <= 16; x++) context.grid[context.idx(x, 8)].wall = true;
+  context.grid[context.idx(10, 9)].wall = true;
+  for (let y = 1; y <= 7; y++) context.grid[context.idx(10, y)].wall = false;
+  context.dir = context.openingDir();
+  assert.equal(context.dir.x, 0);
+  assert.equal(context.dir.y, -1);
+  assert.ok(context.straightClear(10, 8, 0, -1) > context.straightClear(10, 8, 1, 0));
+
+  for (let y = 1; y < 17; y++) for (let x = 1; x < 17; x++) context.grid[context.idx(x, y)].wall = false;
+  context.dir = context.openingDir();
+  const down = context.straightClear(10, 8, 0, 1);
+  const right = context.straightClear(10, 8, 1, 0);
+  assert.ok(down > right);
+  assert.equal(context.dir.x, 0);
+  assert.equal(context.dir.y, 1);
+  assert.equal(context.isSnakeCell(9, 8), true);
 });
 
 test('a longer continue snake stays on the board', ()=>{

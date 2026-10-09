@@ -34,8 +34,8 @@
       repeating-linear-gradient(0deg, rgba(0,0,0,.15) 0 1px, transparent 1px 3px),
       radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,.5) 100%)}
   #count{position:absolute;z-index:4;top:7px;left:50%;transform:translateX(-50%);box-sizing:border-box;min-width:1.5em;padding:4px 10px 5px;border-radius:8px;background:#07141a;border:2px solid #9dfff0;color:#f7fffd;font:800 clamp(26px,8vmin,36px)/1 ui-monospace,Menlo,Consolas,monospace;text-align:center;pointer-events:none;box-shadow:0 0 0 1px #02110e,0 2px 10px rgba(0,0,0,.75)}
-  #panel{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(2,6,10,.82);border-radius:6px;z-index:5}
-  #panelbox{background:#071019;border:1px solid #1d3b45;border-radius:8px;padding:18px 22px;min-width:290px;max-width:86%;text-align:center;box-shadow:0 0 40px rgba(0,0,0,.6)}
+  #panel{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(2,6,10,.82);border-radius:6px;z-index:5;overflow:auto}
+  #panelbox{background:#071019;border:1px solid #1d3b45;border-radius:8px;padding:18px 22px;min-width:290px;max-width:86%;max-height:100%;overflow:auto;box-sizing:border-box;text-align:center;box-shadow:0 0 40px rgba(0,0,0,.6)}
   #panel h2{margin:0 0 10px;font-size:15px;letter-spacing:4px;color:#7fd8c8;font-weight:600}
   #lblist{list-style:none;margin:0 0 12px;padding:0;font-size:13px;text-align:left;max-height:36vh;overflow:auto}
   #lblist li{display:flex;gap:10px;padding:4px 0;color:#cfe8e2;border-bottom:1px solid #0d1c24}
@@ -57,6 +57,8 @@
   @media (max-width:600px){
     #hud{gap:8px}
     #hud button{padding:6px 12px;font-size:12px}
+    #lblist{max-height:18vh}
+    #panelbox{padding:12px 14px;min-width:0}
   }
 </style>
 </head>
@@ -121,7 +123,7 @@ let state='title',grid=null,snake=null,dir={x:1,y:0},dirQueue=[],food=null,pings
 let best=Number(localStorage.getItem('sonarsnake_best')||0);
 bestEl.textContent=best;
 
-const GAME_VERSION='1.5.6';
+const GAME_VERSION='1.5.7';
 function uuid(){return crypto.randomUUID?crypto.randomUUID():'u'+Date.now().toString(36)+Math.random().toString(36).slice(2);}
 let cid=localStorage.getItem('ss_cid');
 if(!cid){cid=uuid();try{localStorage.setItem('ss_cid',cid);}catch(e){}}
@@ -451,7 +453,8 @@ function computeReachable(sx,sy){
 // across, so the body cannot sit 10 from every wall. Centering it puts the
 // tail 6 from the left border and the head 7 from the right — 6 is the most
 // every segment can have. Level 1 removes any interior wall closer than the
-// border already is, and leaves the opening heading clear to that border.
+// border already is, and clears the row east of the head out to the border.
+// The facing is chosen after that, from the longest open run.
 const OPEN_LEN=5;
 const OPEN_CLEAR=6;
 // 3, 2, 1 at the top centre, one second each, then the first step. The digit
@@ -512,7 +515,7 @@ function genMaze(){
     if(R.size>(COLS-2)*(ROWS-2)*0.35)break;
   }
   snake=cells.map(c=>({x:c.x,y:c.y}));
-  dir={x:1,y:0};dirQueue=[];
+  dir=openingDir();dirQueue=[];
 }
 
 // Open neighbours ignore walls and the whole snake. The tail will move, but
@@ -585,6 +588,30 @@ function isCulDeSac(x,y){
     if(!wide)return true;
   }
   return false;
+}
+function straightClear(x,y,dx,dy){
+  let n=0,cx=x+dx,cy=y+dy;
+  while(inB(cx,cy)&&!grid[idx(cx,cy)].wall&&!isSnakeCell(cx,cy)){n++;cx+=dx;cy+=dy;}
+  return n;
+}
+function spaceAhead(x,y,dx,dy){
+  const nx=x+dx,ny=y+dy;
+  if(!inB(nx,ny)||grid[idx(nx,ny)].wall||isSnakeCell(nx,ny))return 0;
+  return floodOpen(nx,ny).size;
+}
+// The body already blocks the cell behind the head. Face the other way with
+// the longest straight run, and break ties toward the larger open area.
+// Spawn clearance still carves the neighbourhood; this only picks a heading.
+function openingDir(){
+  const head=snake[0];
+  let best={x:1,y:0},bestScore=-1;
+  for(const [dx,dy] of [[1,0],[0,-1],[0,1],[-1,0]]){
+    const nx=head.x+dx,ny=head.y+dy;
+    if(!inB(nx,ny)||grid[idx(nx,ny)].wall||isSnakeCell(nx,ny))continue;
+    const score=straightClear(head.x,head.y,dx,dy)*1000+spaceAhead(head.x,head.y,dx,dy);
+    if(score>bestScore){bestScore=score;best={x:dx,y:dy};}
+  }
+  return best;
 }
 function pickCell(list){
   return list[Math.floor(Math.random()*list.length)];
@@ -729,7 +756,7 @@ function showPanel(withForm,src){
   track('lb_open',{src:src||'manual'});
   fetchLB().then(renderLB);
 }
-function hidePanel(){panel.hidden=true;lform.hidden=true;}
+function hidePanel(){panel.hidden=true;lform.hidden=true;lname.blur();}
 const lsubmit=lform.querySelector('button');
 lname.addEventListener('input',fitName);
 lform.addEventListener('submit',async e=>{
@@ -746,7 +773,8 @@ lform.addEventListener('submit',async e=>{
       body:JSON.stringify({name,score,level})
     });
     if(!r.ok)throw 0;
-    submitted=true;lform.hidden=true;
+    submitted=true;lform.hidden=true;lname.blur();
+    scoreEl.textContent=score;
     const d=await r.json();
     track('lb_submit',{score,qualified:!!(d&&d.qualified)});
     renderLB(Array.isArray(d&&d.list)?d.list:null);
@@ -754,6 +782,13 @@ lform.addEventListener('submit',async e=>{
 });
 pbtnagain.addEventListener('click',e=>{e.currentTarget.blur();hidePanel();newGame();});
 pbtnclose.addEventListener('click',e=>{e.currentTarget.blur();hidePanel();});
+panel.addEventListener('pointerdown',e=>{
+  if(e.target.closest('button,input,#lblist,form'))return;
+  lname.blur();
+  if(!lform.hidden){hidePanel();return;}
+  hidePanel();
+  if(state==='dead'&&deathT>0.5&&!adHold)newGame();
+});
 function setMuted(next){
   muted=next;
   sndbtn.textContent=muted?'snd off':'snd on';
@@ -855,6 +890,7 @@ function die(cause,deathX,deathY){
     best=score;localStorage.setItem('sonarsnake_best',best);
     bestEl.textContent=best;
   }
+  scoreEl.textContent=score;
   tone(150,38,0.7,'sawtooth',0.16);
 }
 
@@ -1135,6 +1171,16 @@ const KEYDIRS={ArrowUp:[0,-1],ArrowDown:[0,1],ArrowLeft:[-1,0],ArrowRight:[1,0],
                w:[0,-1],s:[0,1],a:[-1,0],d:[1,0],
                W:[0,-1],S:[0,1],A:[-1,0],D:[1,0]};
 function queueDir(d){
+  // During 3-2-1 the latest safe press replaces the buffer and is the first
+  // step. A 180 into the body is ignored. Later play still queues up to three.
+  if(startGrace>0){
+    const nx=snake&&snake[0]?snake[0].x+d[0]:0,ny=snake&&snake[0]?snake[0].y+d[1]:0;
+    if((d[0]===-dir.x&&d[1]===-dir.y)||(snake&&isSnakeCell(nx,ny)))return;
+    dirQueue.length=0;
+    if(d[0]===dir.x&&d[1]===dir.y)return;
+    dirQueue.push({x:d[0],y:d[1]});
+    return;
+  }
   const last=dirQueue.length?dirQueue[dirQueue.length-1]:dir;
   if(d[0]===-last.x&&d[1]===-last.y)return;
   if(d[0]===last.x&&d[1]===last.y)return;
@@ -1144,10 +1190,11 @@ function queueDir(d){
 window.addEventListener('keydown',e=>{
   initAudio();
   const ae=document.activeElement;
-  if(ae&&ae.tagName==='INPUT'){
+  if(ae&&ae.tagName==='INPUT'&&!panel.hidden){
     if(e.key==='Escape'){lname.blur();hidePanel();}
     return;
   }
+  if(ae&&ae.tagName==='INPUT')ae.blur();
   const k=e.key;
   if(adHold){if(k===' '||KEYDIRS[k])e.preventDefault();return;}
   if(k===' '||KEYDIRS[k])e.preventDefault();
@@ -1159,7 +1206,14 @@ window.addEventListener('keydown',e=>{
   }
   if(state==='title'){if(!panel.hidden)return;newGame();if(KEYDIRS[k])queueDir(KEYDIRS[k]);return;}
   if(state==='dead'){
-    if(deathT>0.5&&(k==='r'||k==='R'||k==='Enter'||k===' '))newGame();
+    // Enter and Space belong to the name form (they submit). R is a restart
+    // even while that form is up, unless the player is typing the tag.
+    if(!panel.hidden&&!lform.hidden){
+      if(k==='Escape'){lname.blur();hidePanel();}
+      else if(deathT>0.5&&(k==='r'||k==='R')){lname.blur();hidePanel();newGame();}
+      return;
+    }
+    if(deathT>0.5&&(k==='r'||k==='R'||k==='Enter'||k===' ')){lname.blur();hidePanel();newGame();}
     return;
   }
   if(k===' '){flash(false);return;}

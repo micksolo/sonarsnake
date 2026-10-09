@@ -106,7 +106,10 @@ function loadGame(){
     showPanel(){},
     offerContinueAd(){},
     die(cause){ context.state = 'dead'; context.died = cause; },
-    countEl: { hidden: true, textContent: '' }
+    countEl: { hidden: true, textContent: '' },
+    isSnakeCell(x, y){
+      return !!(context.snake && context.snake.some((s) => s.x === x && s.y === y));
+    }
   };
   context.document = {
     getElementById(id){ return id === 'count' ? context.countEl : null; }
@@ -144,8 +147,8 @@ function advance(game, seconds){
   for (let i = 0; i < frames; i++) game.update(0.05);
 }
 
-test('version 1.5.6 puts a solid 3, 2, 1 above the CRT vignette', () => {
-  assert.match(html, /const GAME_VERSION='1\.5\.6';/);
+test('version 1.5.7 puts a solid 3, 2, 1 above the CRT vignette', () => {
+  assert.match(html, /const GAME_VERSION='1\.5\.7';/);
   const beat = html.match(/const COUNT_BEAT=(\d+(?:\.\d+)?);/);
   const from = html.match(/const COUNT_FROM=(\d+);/);
   const grace = html.match(/const START_GRACE=(\d+(?:\.\d+)?);/);
@@ -327,7 +330,7 @@ test('a restart pauses again and does not keep the previous heading', () => {
   assert.equal(game.snake[0].y, 9);
 });
 
-test('the opening pause does not swallow the first keyboard or swipe turn', () => {
+test('the latest safe turn during the countdown is the first move', () => {
   const keys = between("window.addEventListener('keydown'", "document.addEventListener('touchmove'");
   assert.match(keys, /newGame\(\);if\(KEYDIRS\[k\]\)queueDir\(KEYDIRS\[k\]\)/);
   assert.doesNotMatch(keys, /startGrace/);
@@ -342,15 +345,56 @@ test('the opening pause does not swallow the first keyboard or swipe turn', () =
 
   const game = loadGame();
   game.beginRun();
+  const head = { ...game.snake[0] };
+  game.queueDir([0, -1]);
+  game.queueDir([0, 1]);
+  game.queueDir([-1, 0]);
+  assert.equal(game.dirQueue.length, 1);
+  assert.equal(game.dirQueue[0].x, 0);
+  assert.equal(game.dirQueue[0].y, 1);
+  advance(game, game.START_GRACE - 0.05);
+  assert.deepEqual(game.snake[0], head);
+  advance(game, 0.05);
+  assert.equal(game.snake[0].x, head.x);
+  assert.equal(game.snake[0].y, head.y + 1);
+  assert.equal(game.dir.y, 1);
+  assert.equal(game.dirQueue.length, 0);
+
+  game.beginRun();
+  game.queueDir([0, -1]);
+  game.queueDir([1, 0]);
+  assert.equal(game.dirQueue.length, 0);
+  advance(game, game.START_GRACE);
+  assert.equal(game.snake[0].x, 11);
+  assert.equal(game.snake[0].y, 8);
+
+  game.startGrace = 0;
+  game.dir = { x: 1, y: 0 };
+  game.dirQueue = [];
   game.queueDir([0, -1]);
   game.queueDir([-1, 0]);
-  advance(game, game.START_GRACE);
-  assert.equal(game.snake[0].x, 10);
-  assert.equal(game.snake[0].y, 7);
-  assert.equal(game.dirQueue.length, 1);
-  assert.equal(game.dirQueue[0].x, -1);
-  assert.equal(game.dirQueue[0].y, 0);
-  game.update(0.26);
-  assert.equal(game.snake[0].x, 9);
-  assert.equal(game.snake[0].y, 7);
+  game.queueDir([1, 0]);
+  game.queueDir([0, 1]);
+  assert.equal(game.dirQueue.length, 3);
+  assert.equal(game.dirQueue[2].y, 1);
+});
+
+test('submitting or dismissing the name prompt keeps the scored run on screen', () => {
+  const die = extract(html, 'die');
+  assert.match(die, /scoreEl\.textContent=score/);
+  const submit = between("lform.addEventListener('submit'", "pbtnagain.addEventListener");
+  assert.match(submit, /state!=='dead'/);
+  assert.match(submit, /scoreEl\.textContent=score/);
+  assert.match(submit, /lname\.blur\(\)/);
+  const hide = extract(html, 'hidePanel');
+  assert.match(hide, /lname\.blur\(\)/);
+  const keys = between("window.addEventListener('keydown'", "document.addEventListener('touchmove'");
+  assert.match(keys, /tagName==='INPUT'&&!panel\.hidden/);
+  assert.match(keys, /tagName==='INPUT'\)ae\.blur\(\)/);
+  assert.match(keys, /!panel\.hidden&&!lform\.hidden\)\{\s*if\(k==='Escape'\)\{lname\.blur\(\);hidePanel\(\);\}\s*else if\(deathT>0\.5&&\(k==='r'\|\|k==='R'\)\)\{lname\.blur\(\);hidePanel\(\);newGame\(\);\}\s*return;\s*\}/);
+  const tap = between("panel.addEventListener('pointerdown'", "function setMuted");
+  assert.match(tap, /!lform\.hidden\)\{hidePanel\(\);return;\}/);
+  assert.match(tap, /state==='dead'&&deathT>0\.5&&!adHold\)newGame\(\)/);
+  assert.match(html, /#panel\{[^}]*overflow:auto/);
+  assert.match(html, /#lblist\{max-height:18vh\}/);
 });
